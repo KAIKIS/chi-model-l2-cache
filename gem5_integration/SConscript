@@ -1,0 +1,11 @@
+# gem5_integration/SConscript
+Import('*')
+
+# 注册 SLCc 状态机
+SimProtocol('our_l2')
+
+# 链接 CHI-new 静态库
+chi_new_lib = Dir('/home/zhangkai/work/CHI-new/build')
+
+env.Append(LIBPATH=[chi_new_lib])
+env.Append(LIBS=['cache_model', 'chi_model', 'middleware'])
