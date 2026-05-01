@@ -7,13 +7,13 @@ HnNode::HnNode(NodeID id)
 }
 
 void HnNode::process() {
-    while (running_) {
-        auto reqOpt = rnChannel_.tryPop();
+    while (running_.load(std::memory_order_relaxed)) {
+        auto reqOpt = rnChannel_.tryPopIn();
         if (reqOpt.has_value()) {
             processRequest(reqOpt.value());
         }
 
-        auto respOpt = snChannel_.tryPop();
+        auto respOpt = snChannel_.tryPopIn();
         if (respOpt.has_value()) {
             processResponse(respOpt.value());
         }
@@ -21,7 +21,7 @@ void HnNode::process() {
 }
 
 void HnNode::stop() {
-    running_ = false;
+    running_.store(false, std::memory_order_relaxed);
 }
 
 ChiTransaction HnNode::transformRequest(const ChiTransaction& req) {
@@ -52,17 +52,17 @@ void HnNode::processRequest(const ChiTransaction& req) {
         comp.addr = req.addr;
         comp.srcNodeID = req.srcNodeID;
         comp.respStatus = RespStatus::OK;
-        rnChannel_.push(std::move(comp));
+        rnChannel_.pushOut(std::move(comp));
         return;
     }
 
     ChiTransaction snReq = transformRequest(req);
-    snChannel_.push(std::move(snReq));
+    snChannel_.pushOut(std::move(snReq));
 }
 
 void HnNode::processResponse(const ChiTransaction& resp) {
     ChiTransaction rnResp = transformResponse(resp);
-    rnChannel_.push(std::move(rnResp));
+    rnChannel_.pushOut(std::move(rnResp));
 }
 
 } // namespace chi
