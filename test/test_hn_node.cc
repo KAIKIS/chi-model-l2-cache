@@ -1,0 +1,1 @@
+// Test HN node - stub

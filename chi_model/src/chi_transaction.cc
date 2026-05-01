@@ -1,0 +1,1 @@
+// CHI Transaction implementation - stub
