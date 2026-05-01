@@ -1,0 +1,46 @@
+// gem5_integration/our_l2.sm
+// SLCc 状态机：桥接 gem5 Ruby CHI 网络和 CHI-new 模型
+
+machine(MachineType, "OurL2"):
+    // 网络端口
+    network_port(RequestToDir, in, "Request network port")
+    network_port(ResponseToDir, in, "Response network port")
+    network_port(RequestFromDir, out, "Request network port")
+    network_port(ResponseFromDir, out, "Response network port")
+
+    // 状态声明
+    enumeration(State, default="IDLE"):
+        IDLE
+        PROCESSING
+
+    // In-flight 跟踪表
+    structure(in_flight_table, Entry, 64):
+        field(rxn_id, uint32_t)
+        field(snxn_id, uint32_t)
+        field(src_node, uint16_t)
+        field(orig_op, uint8_t)
+        field(addr, uint64_t)
+        field(state, uint8_t)
+
+    // Action: 处理来自 RN 的请求
+    action(handle_rn_request, "a", desc="Handle incoming RN request"):
+        // 1. 从网络接收请求
+        // 2. 分配 in-flight entry
+        // 3. 通过 middleware 转换
+        // 4. 推入 Channel 到 HnNode
+        // 5. 标记 entry 为 WAIT_SN_RESP
+
+    // Action: 处理来自 SN 的响应
+    action(handle_sn_response, "b", desc="Handle SN response"):
+        // 1. 从 Channel 接收响应
+        // 2. 查找 in-flight table by txnID
+        // 3. 通过 middleware 转换回 gem5 格式
+        // 4. 发送到 RN 网络
+        // 5. 释放 in-flight entry
+
+    // Transition
+    transition(IDLE, RequestToDir, handle_rn_request, IDLE)
+    transition(IDLE, ResponseToDir, handle_sn_response, IDLE)
+
+    // 入口
+    entry: IDLE
