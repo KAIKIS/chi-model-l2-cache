@@ -53,27 +53,30 @@ gem5 进程（Ruby CHI 模式）
 
 ### 1. 中间件控制器
 
-**文件：** `src/mem/my_l2/chi_middleware.hh` / `chi_middleware.cc`（沿用 demo 路径）
+**文件：** `src/mem/my_l2/our_l2_middleware.hh` / `our_l2_middleware.cc`
 
-**Python 定义：** `src/mem/my_l2/CHIMiddleware.py`
+**Python 定义：** `src/mem/my_l2/OurL2Middleware.py`
 
 ```cpp
 class OurL2Middleware : public CHIGenericController {
     // CHI-new 模型实例
-    chi::HnNode* hnNode;
+    std::unique_ptr<chi::HnNode> hnNode;
 
-    void recvRequestMsg(CHIRequestMsg* msg) override {
+    bool recvRequestMsg(const CHIRequestMsg* msg) override {
         // 1. gem5 CHI 消息 → CHI-new opcode
         // 2. 调用 hnNode->transformRequest()
-        // 3. 转换后的请求 → 发送到 Memory
+        // 3. 根据请求类型分发：
+        //    - CleanUnique → 直接返回 Comp
+        //    - Write* → 发送 CompDBIDResp，等待数据
+        //    - Read* → 转发到 Memory（DMT 模式）
     }
 
-    void recvDataMsg(CHIDataMsg* msg) override {
-        // SN 返回的数据 → 转发给 L1
+    bool recvDataMsg(const CHIDataMsg* msg) override {
+        // L1 写数据 → 消费（不需响应）
     }
 
-    void recvResponseMsg(CHIResponseMsg* msg) override {
-        // SN 返回的响应 → 转发给 L1
+    bool recvResponseMsg(const CHIResponseMsg* msg) override {
+        // Memory 响应 → 转发给 L1
     }
 };
 ```
@@ -82,16 +85,62 @@ class OurL2Middleware : public CHIGenericController {
 
 gem5 CHI 枚举 ↔ CHI-new `chi::Opcode` 映射：
 
-```
-gem5 CHIRequestType:ReadShared  → chi::Opcode::ReadShared
-gem5 CHIRequestType:ReadUnique  → chi::Opcode::ReadUnique
-gem5 CHIRequestType:WriteBackFull → chi::Opcode::WriteBackFull
+**gem5 → CHI-new（gem5ToOpcode）：**
 
-chi::Opcode::ReadNoSnp  → gem5 CHIRequestType:ReadNoSnp
-chi::Opcode::WriteNoSnp → gem5 CHIRequestType:WriteNoSnp
+| gem5 CHIRequestType | chi::Opcode | 说明 |
+|---|---|---|
+| ReadShared | ReadShared | 读共享 |
+| ReadUnique | ReadUnique | 读独占 |
+| CleanUnique | CleanUnique | 特殊处理：直接返回 Comp |
+| MakeReadUnique | ReadUnique | 升级为独占 |
+| WriteBackFull | WriteBackFull | 写回 |
+| WriteUniqueFull/Ptl/Zero | WriteBackFull | 写独占 |
+| WriteEvictFull | WriteBackFull | 写逐出 |
+| WriteCleanFull | WriteBackFull | 写清洁 |
+| Evict | WriteBackFull | 逐出 |
+| StashOnceShared/Unique | ReadShared | Stash 操作 |
+
+**CHI-new → gem5（opcodeToGem5）：**
+
+| chi::Opcode | gem5 CHIRequestType | 说明 |
+|---|---|---|
+| ReadNoSnp | ReadNoSnp | 读请求转发 |
+| WriteNoSnp | WriteNoSnp | 写请求转发 |
+| 其他 | ReadNoSnp（fallback） | 透传 opcode 的降级处理 |
+
+### 3. 数据路由（DMT 模式）
+
+对于读请求，使用 Direct Memory Transfer（DMT）模式：
+- 中间件设置 `fwdRequestor = L1` 和 `dataToFwdRequestor = true`
+- Memory 直接发送数据到 L1（不经过中间件）
+- L1 发送 CompAck 到中间件（消费）
+
+```
+L1 → ReadShared → 中间件 → ReadNoSnp → Memory
+                                    ↓
+                             CompData → L1（直达）
+L1 → CompAck → 中间件（消费）
 ```
 
-### 3. Python 配置
+### 4. 日志系统
+
+CHI-new 模型使用独立的日志系统（`chi_log.hh`），与 gem5 的 DPRINTF 解耦：
+
+```cpp
+#include "chi_log.hh"
+
+// 设置日志级别
+chi::setLogLevel(chi::LogLevel::DEBUG);
+
+// 使用宏
+CHI_LOG_INFO("processRequest: opcode=%s", opcodeToString(op));
+CHI_LOG_DEBUG("transformRequest: %s -> ReadNoSnp", ...);
+CHI_LOG_WARN("pass-through opcode: %s", ...);
+```
+
+日志级别：NONE < ERROR < WARN < INFO < DEBUG < TRACE
+
+### 5. Python 配置
 
 ```python
 class OurL2Middleware(CHIGenericController):
@@ -99,7 +148,7 @@ class OurL2Middleware(CHIGenericController):
     # 连接到 Ruby 网络
 ```
 
-### 4. 系统配置
+### 6. 系统配置
 
 ```python
 class OurL2CacheHierarchy(AbstractRubyCacheHierarchy):
@@ -111,13 +160,13 @@ class OurL2CacheHierarchy(AbstractRubyCacheHierarchy):
         # 设置 downstream_destinations
 ```
 
-### 5. 构建集成
+### 7. 构建集成
 
 - `src/mem/my_l2/SConscript`：注册 SimObject + 编译 .cc
 - 链接 CHI-new 静态库（`libchi_model`）
 - include CHI-new 头文件路径
 
-### 6. 测试命令
+### 8. 测试命令
 
 ```bash
 scons build/ARM/gem5.opt -j$(nproc)

@@ -8,6 +8,8 @@ IMPORTANT: Design specs MUST be saved to docs/design/, NOT docs/superpowers/spec
 
 ## 其他项目的路径
 
+请参考GEM5对CHI协议的实现以及CHI协议的spec，实现我们自己的CHI model.
+
  - GEM5源码的路径: ./gem5
  - ARM CHI的spec文档路径: ./docs/CHI/IHI0050H_amba_chi_architecture_spec.pdf
 

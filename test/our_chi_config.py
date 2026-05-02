@@ -12,8 +12,11 @@ import sys
 import os
 
 # Import everything from the default CHI_config
-# Use absolute path since __file__ may not be available when loaded by gem5
-sys.path.insert(0, '/home/zhangkai/work/CHI-new/gem5/configs/ruby')
+# Compute path relative to this script's location
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+_project_root = os.path.dirname(_script_dir)
+_gem5_ruby_config = os.path.join(_project_root, 'gem5', 'configs', 'ruby')
+sys.path.insert(0, _gem5_ruby_config)
 from CHI_config import *
 
 

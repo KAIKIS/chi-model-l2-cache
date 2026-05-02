@@ -1,6 +1,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <unistd.h>
 
 constexpr size_t SIZE = 128 * 1024;  // 128KB
 constexpr size_t ELEMENTS = SIZE / sizeof(uint64_t);
@@ -16,6 +17,9 @@ uint64_t computeChecksum(const uint64_t* data, size_t count) {
 }
 
 int main() {
+    // Disable stdio buffering so output is visible immediately
+    setvbuf(stdout, NULL, _IONBF, 0);
+
     for (size_t i = 0; i < ELEMENTS; i++) {
         memory[i] = static_cast<uint64_t>(i);
     }
@@ -29,9 +33,11 @@ int main() {
 
     if (checksum == expected) {
         printf("PASS\n");
-        return 0;
     } else {
         printf("FAIL\n");
-        return 1;
     }
+
+    // Use _exit to skip libc cleanup (atexit, stdio flush) which
+    // hangs gem5's Ruby drain after exit() syscall.
+    _exit(checksum == expected ? 0 : 1);
 }
