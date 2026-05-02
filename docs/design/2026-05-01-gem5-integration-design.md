@@ -1,183 +1,134 @@
-# gem5 集成设计 — OurL2 SLICC 控制器
+# gem5 集成设计 — CHIGenericController 中间件架构
 
 ## 概述
 
-将 CHI-new 模型集成到 gem5 的 Ruby CHI 协议中，替换 gem5 原生 L2 Cache 控制器，运行 128KB 连续访问测试程序进行端到端验证。
+将 CHI-new 模型集成到 gem5 的 Ruby CHI 协议中，替换 gem5 原生 Home Node，运行 128KB 连续访问测试程序进行端到端验证。
+
+采用 `CHIGenericController`（C++ 控制器）而非 SLICC 状态机，以便自由调用 CHI-new 模型的 C++ 代码。
 
 ## 目标
 
-- 创建 SLICC 状态机 `CHI-L2Our.sm`，作为 gem5 Ruby 网络和 CHI-new 模型之间的桥接
-- 在 SLICC action 中同步调用 CHI-new 的 `HnNode::transformRequest()` 进行 opcode 转换
-- 在 L2 控制器中加入请求打印（类型 + 地址）和计数统计
-- 运行 128KB 连续访问程序，验证端到端正确性
+- 创建 `CHIGenericController` 子类作为中间件，在 `recvRequestMsg` 回调中调用 CHI-new 模型
+- gem5 CHI 消息 → 自定义消息 → CHI-new 模型处理 → gem5 CHI 消息，验证端到端正确性
+- 请求日志（类型 + 地址）和计数统计
 
 ## 非目标
 
-- 不实现完整的缓存行为（直通模式）
-- 不使用 Channel 和异步线程（SLICC action 是同步的）
+- 不实现完整缓存行为（直通模式）
 - 不修改 gem5 原有 CHI 协议文件
 
 ## 架构
 
 ```
 gem5 进程（Ruby CHI 模式）
-┌──────────────────────────────────────────────────────────┐
-│  Ruby 网络                                               │
-│  ┌──────┐  ┌─────┐        ┌──────────────┐  ┌────────┐  │
-│  │ CPU  │─▶│ L1  │◀══════▶│ CHI-L2Our.sm │──▶│ Memory │  │
-│  │      │  │(RN) │  网络   │ (SLCc)       │  │ (SN)   │  │
-│  └──────┘  └─────┘        └──────┬───────┘  └────────┘  │
-│                                  │ C++ 调用               │
-│  ┌───────────────────────────────┼─────────────────────┐  │
-│  │  CHI-new 静态库                │                     │  │
-│  │  ┌────────────────────┐  ┌────┴──────────────┐     │  │
-│  │  │ chi_middleware      │  │ HnNode            │     │  │
-│  │  │ (opcode 转换)       │  │ (transformRequest)│     │  │
-│  │  └────────────────────┘  └───────────────────┘     │  │
-│  └─────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│  Ruby 网络 (SimplePt2Pt, 4 VNet)                                │
+│  ┌──────┐  ┌─────────────────┐  ┌──────────────────┐  ┌──────┐  │
+│  │ CPU  │─▶│ L1 (SLICC)      │◀═▶│ CHIMiddleware    │──▶│ Mem  │  │
+│  │      │  │ PrivateL1MOESI  │  │ (CHIGenericCtrl) │  │ Ctrl │  │
+│  └──────┘  └─────────────────┘  └────────┬─────────┘  └──────┘  │
+│                                          │                       │
+│                                          │ 调用                   │
+│                                          ▼                       │
+│                               ┌──────────────────┐               │
+│                               │ CHI-new 模型      │               │
+│                               │ HnNode            │               │
+│                               │ transformRequest()│               │
+│                               └──────────────────┘               │
+└──────────────────────────────────────────────────────────────────┘
 ```
+
+## 为什么选择 CHIGenericController 而非 SLICC
+
+| | SLICC | CHIGenericController |
+|---|---|---|
+| 语言 | DSL，编译生成 C++ | 直接写 C++ |
+| 调外部代码 | 不支持 | 随意调用 |
+| 适用场景 | 标准缓存协议 | 自定义逻辑 |
+| 与 L1 兼容 | 是 | 是（demo 已验证） |
+
+**核心原因：** SLICC 无法调用 CHI-new 模型的 C++ 代码，而 `CHIGenericController` 可以。
 
 ## 模块设计
 
-### 1. SLICC 状态机：CHI-L2Our.sm
+### 1. 中间件控制器
 
-**文件位置：** `gem5/src/mem/ruby/protocol/chi/CHI-L2Our.sm`
+**文件：** `src/mem/my_l2/chi_middleware.hh` / `chi_middleware.cc`（沿用 demo 路径）
 
-**状态：**
-```slicc
-state_declaration(State, default="OurL2_State_I") {
-    I,     AccessPermission:Invalid, desc="Invalid/Ready";
-    BUSY,  AccessPermission:Busy,    desc="Waiting for downstream response";
-    null,  AccessPermission:Invalid, desc="Null state";
-}
-```
-
-**事件：**
-```slicc
-enumeration(Event) {
-    ReadShared,    desc="RN ReadShared",    in_trans="yes";
-    ReadUnique,    desc="RN ReadUnique",    in_trans="yes";
-    CleanUnique,   desc="RN CleanUnique",   in_trans="yes";
-    WriteBackFull, desc="RN WriteBackFull", in_trans="yes";
-    CompData,      desc="SN CompData";
-    WriteAck,      desc="SN WriteAck";
-    Comp,          desc="SN Comp";
-    Finalize,      desc="Finalize txn";
-    null,          desc="Null event";
-}
-```
-
-**网络端口：**
-- `reqIn` (VNet 0, From): 接收 RN 请求
-- `reqOut` (VNet 0, To): 发送 SN 请求
-- `datIn` (VNet 3, From): 接收 SN 数据响应
-- `datOut` (VNet 3, To): 发送 RN 数据响应
-
-**请求流程（ReadShared）：**
-1. `reqIn` 收到 ReadShared → Event:ReadShared
-2. Action: DPRINTF 打印 + chi_bridge.logRequest() 统计
-3. Action: 调用 transformRequest() → ReadNoSnp
-4. Action: 构造 CHIRequestMsg → reqOut 发送到 SN
-5. 状态 I → BUSY
-
-**响应流程（CompData）：**
-1. `datIn` 收到 CompData → Event:CompData
-2. Action: 构造 CHIDataMsg → datOut 发送到 RN
-3. 状态 BUSY → I
-
-**CleanUnique 特殊处理：**
-1. 收到 CleanUnique → 直接构造 Comp 响应发回 RN
-2. 不需要等 SN 响应，状态保持 I
-
-### 2. C++ 桥接层
-
-**文件：** `gem5/src/mem/ruby/protocol/chi/chi_bridge.hh` / `chi_bridge.cc`
+**Python 定义：** `src/mem/my_l2/CHIMiddleware.py`
 
 ```cpp
-namespace gem5 { namespace ruby {
+class OurL2Middleware : public CHIGenericController {
+    // CHI-new 模型实例
+    chi::HnNode* hnNode;
 
-// 全局 SimpleL2Cache 实例
-chi::SimpleL2Cache* getOurL2Cache();
-void initOurL2Cache(chi::NodeID id);
+    void recvRequestMsg(CHIRequestMsg* msg) override {
+        // 1. gem5 CHI 消息 → CHI-new opcode
+        // 2. 调用 hnNode->transformRequest()
+        // 3. 转换后的请求 → 发送到 Memory
+    }
 
-// 请求转换：调用 HnNode::transformRequest()
-int transformRequest(int reqType);
+    void recvDataMsg(CHIDataMsg* msg) override {
+        // SN 返回的数据 → 转发给 L1
+    }
 
-// 统计和打印
-void logRequest(int reqType, uint64_t addr);
-void printStats();
-
-}}
+    void recvResponseMsg(CHIResponseMsg* msg) override {
+        // SN 返回的响应 → 转发给 L1
+    }
+};
 ```
 
-- `transformRequest()`: 将 gem5 CHIRequestType 映射到 chi::Opcode，调用 `HnNode::transformRequest()`，返回转换后的 opcode
-- `logRequest()`: 递增计数器，打印请求类型和地址
-- `printStats()`: 仿真结束时输出总请求数
+### 2. 消息转换
 
-### 3. SLICC 注册
+gem5 CHI 枚举 ↔ CHI-new `chi::Opcode` 映射：
 
-在 `CHI.slicc` 中添加：
 ```
-include "CHI-L2Our.sm";
+gem5 CHIRequestType:ReadShared  → chi::Opcode::ReadShared
+gem5 CHIRequestType:ReadUnique  → chi::Opcode::ReadUnique
+gem5 CHIRequestType:WriteBackFull → chi::Opcode::WriteBackFull
+
+chi::Opcode::ReadNoSnp  → gem5 CHIRequestType:ReadNoSnp
+chi::Opcode::WriteNoSnp → gem5 CHIRequestType:WriteNoSnp
 ```
 
-SLICC 编译器自动生成：
-- `CHI/L2Our_Controller.{cc,hh}`
-- `CHI/CHI_L2Our_Controller.py`
-- `CHI/L2Our_Transitions.cc`
-- `CHI/L2Our_Wakeup.cc`
+### 3. Python 配置
 
-### 4. Python 配置
-
-在 `CHI_config.py` 中添加：
 ```python
-class CHI_L2OurController(Base_CHI_Cache_Controller):
-    def __init__(self, ruby_system, cache):
-        super().__init__(ruby_system)
-        self.sequencer = NULL
-        self.cache = cache
-        self.is_HN = False
-        self.number_of_TBEs = 32
+class OurL2Middleware(CHIGenericController):
+    # 8 个 MessageBuffer（req/snp/rsp/dat × In/Out）
+    # 连接到 Ruby 网络
+```
+
+### 4. 系统配置
+
+```python
+class OurL2CacheHierarchy(AbstractRubyCacheHierarchy):
+    def incorporate_cache(self, board):
+        # 创建 RubySystem + SimplePt2Pt 网络
+        # 创建 L1 集群（PrivateL1MOESICache）
+        # 创建 OurL2Middleware（替代 Home Node）
+        # 创建 MemoryController
+        # 设置 downstream_destinations
 ```
 
 ### 5. 构建集成
 
-- 在 `chi/SConsopts` 中链接 CHI-new 静态库
-- 桥接代码 `chi_bridge.cc` 作为额外源文件编译
-- 需要 include CHI-new 的头文件路径
+- `src/mem/my_l2/SConscript`：注册 SimObject + 编译 .cc
+- 链接 CHI-new 静态库（`libchi_model`）
+- include CHI-new 头文件路径
 
-### 6. 测试配置
+### 6. 测试命令
 
 ```bash
-build/ARM/gem5.opt configs/example/se.py \
-    --cpu-type=TimingSimpleCPU \
-    --ruby \
-    --chi-config=configs/ruby/our_chi_config.py \
-    test_128kb_aarch64
-```
-
-### 7. 预期输出
-
-```
-[OurL2] Request #1 type=ReadShared addr=0x1000
-[OurL2] Request #2 type=ReadShared addr=0x1040
-[OurL2] Request #3 type=WriteBackFull addr=0x2000
-...
-[OurL2] Total requests: 1234
+scons build/ARM/gem5.opt -j$(nproc)
+./build/ARM/gem5.opt configs/example/arm/our_l2_hierarchy.py
 ```
 
 ## 决策记录
 
-| 决策 | 选择 | 替代方案 | 理由 |
-|---|---|---|---|
-| 集成方式 | SLICC + CHI-new 库调用 | 修改 gem5 现有 L2、纯 C++ 控制器 | 符合 gem5 框架，复用 CHI-new 模型 |
-| 桥接方式 | 同步调用转换函数 | Channel + 异步线程 | SLICC action 同步执行，最简单 |
-| 状态数 | 3 个（I, BUSY, null） | 完整缓存状态 | 直通模式不需要缓存状态 |
-| 日志方式 | DPRINTF + stdout 打印 | 仅 gem5 stats | 满足用户打印需求 |
-
-## 风险
-
-- **SLICC 语法复杂度** → 缓解：参考现有 CHI-cache.sm，只实现最小子集
-- **gem5 CHIRequestType 映射** → 缓解：桥接层处理类型转换
-- **构建系统集成** → 缓解：CHI-new 作为外部静态库链接
+| 决策 | 选择 | 理由 |
+|---|---|---|
+| 集成方式 | CHIGenericController | 可自由调用 CHI-new C++ 代码 |
+| 架构模式 | 中间件 + 回调 | 与 demo 一致，已验证可行 |
+| 文件位置 | src/mem/my_l2/ | 沿用 demo 路径，不污染 gem5 源码 |
+| 消息格式 | 直接使用 gem5 CHI 消息 | 直通模式，不需要自定义消息格式 |

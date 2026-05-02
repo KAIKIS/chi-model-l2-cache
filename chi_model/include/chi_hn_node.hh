@@ -21,7 +21,6 @@ public:
     void process() override;
     void stop();
 
-protected:
     virtual ChiTransaction transformRequest(const ChiTransaction& req);
     virtual ChiTransaction transformResponse(const ChiTransaction& resp);
 
