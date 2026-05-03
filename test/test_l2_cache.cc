@@ -225,6 +225,63 @@ void testL2CacheEviction() {
     std::cout << "  PASS: L2Cache eviction\n";
 }
 
+void testL2CacheDirtyEviction() {
+    L2Cache cache;
+    Addr baseAddr = 0x20000;
+
+    // Fill 8 ways with dirty data (UD state)
+    uint8_t data[64];
+    for (int i = 0; i < 8; i++) {
+        Addr addr = baseAddr + (i << 15);  // Same set, different tags
+        for (int j = 0; j < 64; j++) data[j] = i;
+        cache.fill(addr, LineState::UD, data);
+    }
+
+    // Lookup 9th address — should trigger MissEvictDirty
+    Addr newAddr = baseAddr + (8 << 15);
+    auto resp = cache.lookup(newAddr);
+    assert(resp.result == LookupResult::MissEvictDirty);
+    assert(resp.evictData != nullptr);
+    // evictTag should be the tag of the LRU victim (baseAddr, first filled)
+    assert(resp.evictTag == L2Cache::getTag(baseAddr));
+
+    std::cout << "  PASS: L2Cache dirty eviction\n";
+}
+
+void testL2CacheEvictionCycle() {
+    L2Cache cache;
+    Addr baseAddr = 0x30000;
+
+    // Fill 8 ways
+    uint8_t data[64];
+    for (int i = 0; i < 8; i++) {
+        Addr addr = baseAddr + (i << 15);
+        for (int j = 0; j < 64; j++) data[j] = i;
+        cache.fill(addr, LineState::SC, data);
+    }
+
+    // Lookup 9th address — miss
+    Addr newAddr = baseAddr + (8 << 15);
+    auto resp = cache.lookup(newAddr);
+    assert(resp.result == LookupResult::Miss);
+
+    // Fill the new address (evicts LRU victim)
+    uint8_t newData[64];
+    for (int j = 0; j < 64; j++) newData[j] = 0xAB;
+    cache.fill(newAddr, LineState::SC, newData);
+
+    // New address should hit
+    resp = cache.lookup(newAddr);
+    assert(resp.result == LookupResult::Hit);
+    assert(resp.data[0] == 0xAB);
+
+    // Old LRU address should miss (was evicted)
+    resp = cache.lookup(baseAddr);
+    assert(resp.result == LookupResult::Miss);
+
+    std::cout << "  PASS: L2Cache eviction cycle\n";
+}
+
 int main() {
     std::cout << "L2 Cache tests:\n";
     testCacheLineInitialState();
@@ -238,6 +295,8 @@ int main() {
     testL2CacheSharers();
     testL2CacheStateTransitions();
     testL2CacheEviction();
+    testL2CacheDirtyEviction();
+    testL2CacheEvictionCycle();
     std::cout << "All L2 Cache basic tests passed!\n";
     return 0;
 }
