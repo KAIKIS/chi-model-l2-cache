@@ -52,7 +52,7 @@ struct CacheLine {
 
 struct CacheSet {
     std::array<CacheLine, CACHE_WAYS> lines;
-    std::array<int, CACHE_WAYS> lru = {};
+    std::array<int, CACHE_WAYS> lru = {0, 1, 2, 3, 4, 5, 6, 7};
 
     // Returns way index of hit, or -1 on miss
     int lookup(uint64_t tag) const {
@@ -65,7 +65,7 @@ struct CacheSet {
     }
 
     // Update LRU after accessing way i:
-    // Move accessed way to MRU position (0), compress remaining positions.
+    // Move accessed way to MRU position (CACHE_WAYS - 1), compress remaining positions.
     void touch(int way) {
         int old = lru[way];
         for (int j = 0; j < CACHE_WAYS; j++) {
@@ -77,6 +77,7 @@ struct CacheSet {
     }
 
     // Find way with lowest LRU value (least recently used).
+    // Precondition: caller must check findInvalid() first — this returns a valid line to evict.
     // Ties broken by preferring higher way index.
     int victimWay() const {
         int best = 0;
