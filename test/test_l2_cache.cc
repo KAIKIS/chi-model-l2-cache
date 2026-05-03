@@ -1,4 +1,5 @@
 #include "cache_line.hh"
+#include "l2_cache.hh"
 #include <cassert>
 #include <iostream>
 
@@ -125,6 +126,105 @@ void testCacheSetFindInvalid() {
     std::cout << "  PASS: CacheSet findInvalid\n";
 }
 
+void testL2CacheAddressDecomposition() {
+    Addr addr = 0x12345678;
+    assert(L2Cache::getTag(addr) == (0x12345678ULL >> 15));
+    assert(L2Cache::getSetIndex(addr) == ((0x12345678 >> 6) & 0x1FF));
+
+    // Round-trip
+    uint64_t tag = L2Cache::getTag(addr);
+    int set = L2Cache::getSetIndex(addr);
+    Addr reconstructed = L2Cache::makeAddr(tag, set);
+    assert((addr >> 6) == (reconstructed >> 6));  // Same line address
+
+    std::cout << "  PASS: L2Cache address decomposition\n";
+}
+
+void testL2CacheFillAndLookup() {
+    L2Cache cache;
+    Addr addr = 0x4000;  // set 16, tag = 0x4000 >> 15
+
+    // Miss
+    auto resp = cache.lookup(addr);
+    assert(resp.result == LookupResult::Miss);
+
+    // Fill
+    uint8_t data[64];
+    for (int i = 0; i < 64; i++) data[i] = i;
+    cache.fill(addr, LineState::SC, data);
+
+    // Hit
+    resp = cache.lookup(addr);
+    assert(resp.result == LookupResult::Hit);
+    assert(resp.state == LineState::SC);
+    assert(resp.data[0] == 0);
+    assert(resp.data[63] == 63);
+
+    std::cout << "  PASS: L2Cache fill and lookup\n";
+}
+
+void testL2CacheSharers() {
+    L2Cache cache;
+    Addr addr = 0x8000;
+
+    uint8_t data[64] = {};
+    cache.fill(addr, LineState::SC, data);
+
+    cache.addSharer(addr, 1);
+    cache.addSharer(addr, 2);
+    assert(cache.getSharers(addr).size() == 2);
+
+    cache.removeSharer(addr, 1);
+    assert(cache.getSharers(addr).size() == 1);
+    assert(cache.getSharers(addr).count(2) == 1);
+
+    cache.clearSharers(addr);
+    assert(cache.getSharers(addr).empty());
+
+    std::cout << "  PASS: L2Cache sharers\n";
+}
+
+void testL2CacheStateTransitions() {
+    L2Cache cache;
+    Addr addr = 0xC000;
+
+    uint8_t data[64] = {};
+    cache.fill(addr, LineState::SC, data);
+    assert(cache.getState(addr) == LineState::SC);
+
+    cache.setState(addr, LineState::UD);
+    assert(cache.getState(addr) == LineState::UD);
+    assert(cache.needsWriteback(addr));
+
+    cache.setState(addr, LineState::UC);
+    assert(!cache.needsWriteback(addr));
+
+    cache.invalidate(addr);
+    assert(cache.getState(addr) == LineState::I);
+
+    std::cout << "  PASS: L2Cache state transitions\n";
+}
+
+void testL2CacheEviction() {
+    L2Cache cache;
+    Addr baseAddr = 0x10000;
+
+    // Fill 8 ways in the same set
+    uint8_t data[64];
+    for (int i = 0; i < 8; i++) {
+        Addr addr = baseAddr + (i << 15);  // Same set, different tags
+        for (int j = 0; j < 64; j++) data[j] = i;
+        cache.fill(addr, LineState::SC, data);
+    }
+
+    // All ways occupied, next fill should evict LRU
+    Addr newAddr = baseAddr + (8 << 15);
+    auto resp = cache.lookup(newAddr);
+    assert(resp.result == LookupResult::Miss);  // Clean, no writeback needed
+
+    std::cout << "  PASS: L2Cache eviction\n";
+}
+
 int main() {
     std::cout << "L2 Cache tests:\n";
     testCacheLineInitialState();
@@ -133,6 +233,11 @@ int main() {
     testCacheSetLookupHit();
     testCacheSetLRU();
     testCacheSetFindInvalid();
+    testL2CacheAddressDecomposition();
+    testL2CacheFillAndLookup();
+    testL2CacheSharers();
+    testL2CacheStateTransitions();
+    testL2CacheEviction();
     std::cout << "All L2 Cache basic tests passed!\n";
     return 0;
 }
