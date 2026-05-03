@@ -20,6 +20,12 @@ enum class Opcode : uint8_t {
     CompData      = 0x20,
     WriteAck      = 0x21,
     Comp          = 0x22,
+
+    // Snoop 请求
+    SnpCleanInvalid     = 0x30,
+
+    // Snoop 响应
+    SnpCleanInvalidResp = 0x40,
 };
 
 inline const char* opcodeToString(Opcode op) {
@@ -33,6 +39,8 @@ inline const char* opcodeToString(Opcode op) {
         case Opcode::CompData:      return "CompData";
         case Opcode::WriteAck:      return "WriteAck";
         case Opcode::Comp:          return "Comp";
+        case Opcode::SnpCleanInvalid:     return "SnpCleanInvalid";
+        case Opcode::SnpCleanInvalidResp: return "SnpCleanInvalidResp";
         default:                    return "Unknown";
     }
 }
