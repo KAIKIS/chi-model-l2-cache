@@ -73,7 +73,7 @@ struct CacheSet {
                 lru[j]--;
             }
         }
-        lru[way] = 0;
+        lru[way] = CACHE_WAYS - 1;
     }
 
     // Find way with lowest LRU value (least recently used).

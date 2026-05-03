@@ -87,8 +87,22 @@ void testCacheSetLRU() {
 
     // Touch way 0 -> it becomes MRU
     set.touch(0);
-    assert(set.lru[0] == 0);  // way 0 is now MRU
+    assert(set.lru[0] == CACHE_WAYS - 1);  // way 0 is now MRU
     assert(set.victimWay() == 1);  // way 1 is now LRU
+
+    // Test touching a non-zero way (way 5)
+    {
+        CacheSet set2;
+        for (int i = 0; i < CACHE_WAYS; i++) {
+            set2.lines[i].tag = 0x1000 * i;
+            set2.lines[i].state = LineState::SC;
+            set2.lru[i] = i;  // way 0 = LRU, way 7 = MRU
+        }
+        set2.touch(5);
+        assert(set2.lru[5] == CACHE_WAYS - 1);  // way 5 is now MRU
+        assert(set2.victimWay() != 5);           // touched way should NOT be victim
+        assert(set2.victimWay() == 0);           // way 0 is still LRU
+    }
 
     std::cout << "  PASS: CacheSet LRU\n";
 }
