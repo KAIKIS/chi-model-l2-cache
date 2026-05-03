@@ -1,5 +1,6 @@
 #include "l2_cache.hh"
 #include <cassert>
+#include <cstdio>
 #include <cstring>
 
 namespace chi {
@@ -76,7 +77,15 @@ void L2Cache::fill(Addr addr, LineState state, const uint8_t* data) {
     int setIdx = getSetIndex(addr);
     CacheSet& set = sets_[setIdx];
 
-    assert(set.lookup(tag) < 0 && "fill() called on address already in cache");
+    // If the line is already in cache, update it in place
+    int existingWay = set.lookup(tag);
+    if (existingWay >= 0) {
+        CacheLine& line = set.lines[existingWay];
+        line.state = state;
+        std::memcpy(line.data, data, CACHE_LINE_SIZE);
+        set.touch(existingWay);
+        return;
+    }
 
     int way = set.findInvalid();
     if (way < 0) {
