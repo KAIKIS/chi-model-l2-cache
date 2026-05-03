@@ -1,4 +1,5 @@
 #include "l2_cache.hh"
+#include <cassert>
 #include <cstring>
 
 namespace chi {
@@ -30,15 +31,15 @@ LookupResponse L2Cache::lookup(Addr addr) {
     CacheSet& set = sets_[setIdx];
 
     LookupResponse resp{};
-    resp.data = nullptr;
-    resp.evictData = nullptr;
+    std::memset(resp.data, 0, CACHE_LINE_SIZE);
+    std::memset(resp.evictData, 0, CACHE_LINE_SIZE);
 
     int way = set.lookup(tag);
     if (way >= 0) {
         // Hit
         resp.result = LookupResult::Hit;
         resp.state = set.lines[way].state;
-        resp.data = set.lines[way].data;
+        std::memcpy(resp.data, set.lines[way].data, CACHE_LINE_SIZE);
         set.touch(way);
         return resp;
     }
@@ -59,7 +60,7 @@ LookupResponse L2Cache::lookup(Addr addr) {
     if (victimLine.isDirty()) {
         resp.result = LookupResult::MissEvictDirty;
         resp.evictTag = victimLine.tag;
-        resp.evictData = victimLine.data;
+        std::memcpy(resp.evictData, victimLine.data, CACHE_LINE_SIZE);
         if (victimLine.isShared() && !victimLine.sharers.empty()) {
             resp.evictSharer = *victimLine.sharers.begin();
         }
@@ -74,6 +75,8 @@ void L2Cache::fill(Addr addr, LineState state, const uint8_t* data) {
     uint64_t tag = getTag(addr);
     int setIdx = getSetIndex(addr);
     CacheSet& set = sets_[setIdx];
+
+    assert(set.lookup(tag) < 0 && "fill() called on address already in cache");
 
     int way = set.findInvalid();
     if (way < 0) {

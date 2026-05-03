@@ -1,7 +1,6 @@
 #pragma once
 
 #include "cache_line.hh"
-#include "chi_opcode.hh"
 
 #include <array>
 #include <cstdint>
@@ -20,11 +19,11 @@ enum class LookupResult {
 
 struct LookupResponse {
     LookupResult result;
-    LineState    state;       // Current state of the line (valid on hit)
-    uint8_t*     data;        // Pointer to cache line data (valid on hit)
-    uint64_t     evictTag;    // Tag of evicted line (valid on MissEvictDirty)
-    uint8_t*     evictData;   // Data of evicted line (valid on MissEvictDirty)
-    NodeID       evictSharer; // Single sharer of evicted SD line (if applicable)
+    LineState    state;                        // Current state of the line (valid on hit)
+    uint8_t      data[CACHE_LINE_SIZE];        // Copy of cache line data (valid on hit)
+    uint64_t     evictTag;                     // Tag of evicted line (valid on MissEvictDirty)
+    uint8_t      evictData[CACHE_LINE_SIZE];   // Copy of evicted line data (valid on MissEvictDirty)
+    NodeID       evictSharer;                  // Single sharer of evicted SD line (if applicable)
 };
 
 class L2Cache {

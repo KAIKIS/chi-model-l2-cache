@@ -241,7 +241,7 @@ void testL2CacheDirtyEviction() {
     Addr newAddr = baseAddr + (8 << 15);
     auto resp = cache.lookup(newAddr);
     assert(resp.result == LookupResult::MissEvictDirty);
-    assert(resp.evictData != nullptr);
+    assert(resp.evictData[0] == 0);  // Victim was first filled with all 0s
     // evictTag should be the tag of the LRU victim (baseAddr, first filled)
     assert(resp.evictTag == L2Cache::getTag(baseAddr));
 
