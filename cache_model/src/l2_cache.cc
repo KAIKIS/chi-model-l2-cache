@@ -1,4 +1,5 @@
 #include "l2_cache.hh"
+#include "chi_log.hh"
 #include <cassert>
 #include <cstdio>
 #include <cstring>
@@ -42,6 +43,7 @@ LookupResponse L2Cache::lookup(Addr addr) {
         resp.state = set.lines[way].state;
         std::memcpy(resp.data, set.lines[way].data, CACHE_LINE_SIZE);
         set.touch(way);
+        CHI_LOG_DEBUG("lookup addr=%#x HIT state=%s", addr, lineStateToString(resp.state));
         return resp;
     }
 
@@ -51,6 +53,7 @@ LookupResponse L2Cache::lookup(Addr addr) {
         // Free way available
         resp.result = LookupResult::Miss;
         resp.state = LineState::I;
+        CHI_LOG_DEBUG("lookup addr=%#x MISS (free way)", addr);
         return resp;
     }
 
@@ -65,8 +68,10 @@ LookupResponse L2Cache::lookup(Addr addr) {
         if (victimLine.isShared() && !victimLine.sharers.empty()) {
             resp.evictSharer = *victimLine.sharers.begin();
         }
+        CHI_LOG_DEBUG("lookup addr=%#x MISS evict dirty tag=%#x", addr, victimLine.tag);
     } else {
         resp.result = LookupResult::Miss;
+        CHI_LOG_DEBUG("lookup addr=%#x MISS evict clean", addr);
     }
 
     return resp;
@@ -81,6 +86,8 @@ void L2Cache::fill(Addr addr, LineState state, const uint8_t* data) {
     int existingWay = set.lookup(tag);
     if (existingWay >= 0) {
         CacheLine& line = set.lines[existingWay];
+        CHI_LOG_DEBUG("fill addr=%#x update existing state=%s->%s",
+                      addr, lineStateToString(line.state), lineStateToString(state));
         line.state = state;
         std::memcpy(line.data, data, CACHE_LINE_SIZE);
         set.touch(existingWay);
@@ -98,6 +105,7 @@ void L2Cache::fill(Addr addr, LineState state, const uint8_t* data) {
     line.sharers.clear();
     std::memcpy(line.data, data, CACHE_LINE_SIZE);
     set.touch(way);
+    CHI_LOG_DEBUG("fill addr=%#x way=%d state=%s", addr, way, lineStateToString(state));
 }
 
 void L2Cache::addSharer(Addr addr, NodeID node) {
@@ -108,6 +116,8 @@ void L2Cache::addSharer(Addr addr, NodeID node) {
     int way = set.lookup(tag);
     if (way >= 0) {
         set.lines[way].sharers.insert(node);
+        CHI_LOG_DEBUG("addSharer addr=%#x node=%d sharers=%d",
+                      addr, node, (int)set.lines[way].sharers.size());
     }
 }
 
@@ -153,6 +163,8 @@ void L2Cache::setState(Addr addr, LineState state) {
 
     int way = set.lookup(tag);
     if (way >= 0) {
+        CHI_LOG_DEBUG("setState addr=%#x %s->%s",
+                      addr, lineStateToString(set.lines[way].state), lineStateToString(state));
         set.lines[way].state = state;
     }
 }
@@ -211,6 +223,7 @@ void L2Cache::invalidate(Addr addr) {
 
     int way = set.lookup(tag);
     if (way >= 0) {
+        CHI_LOG_DEBUG("invalidate addr=%#x state=%s", addr, lineStateToString(set.lines[way].state));
         set.lines[way].invalidate();
     }
 }

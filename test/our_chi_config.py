@@ -12,10 +12,32 @@ import sys
 import os
 
 # Import everything from the default CHI_config
-# Compute path relative to this script's location
-_script_dir = os.path.dirname(os.path.abspath(__file__))
-_project_root = os.path.dirname(_script_dir)
-_gem5_ruby_config = os.path.join(_project_root, 'gem5', 'configs', 'ruby')
+# When loaded via gem5's SourceFileLoader, __file__ may not be defined,
+# so we search for the gem5 ruby config in known locations.
+_gem5_ruby_config = None
+_candidates = []
+
+try:
+    _script_dir = os.path.dirname(os.path.abspath(__file__))
+    _candidates.append(os.path.join(os.path.dirname(_script_dir), 'gem5', 'configs', 'ruby'))
+except NameError:
+    pass
+
+# Fallback: search from CWD
+_candidates.append(os.path.join(os.getcwd(), 'gem5', 'configs', 'ruby'))
+# Fallback: environment variable
+_chi_root = os.environ.get('CHI_NEW_ROOT')
+if _chi_root:
+    _candidates.append(os.path.join(_chi_root, 'gem5', 'configs', 'ruby'))
+
+for _p in _candidates:
+    if os.path.isfile(os.path.join(_p, 'CHI_config.py')):
+        _gem5_ruby_config = _p
+        break
+
+if _gem5_ruby_config is None:
+    raise RuntimeError("Cannot find gem5 CHI_config.py. Searched: " + str(_candidates))
+
 sys.path.insert(0, _gem5_ruby_config)
 from CHI_config import *
 
@@ -32,23 +54,7 @@ class OurL2_CHI_RNF(CHI_RNF):
         for cpu in self._cpus:
             cpu.l2 = CHI_L2OurController(self._ruby_system)
             self._cntrls.append(cpu.l2)
-
-            # Manually create only the 6 buffers OurL2 SLICC declares
-            # (do NOT use connectController — it creates snpOut/snpIn
-            #  which OurL2 doesn't have, breaking L1 TBE credits)
-            cpu.l2.reqOut = MessageBuffer()
-            cpu.l2.rspOut = MessageBuffer()
-            cpu.l2.datOut = MessageBuffer()
-            cpu.l2.reqIn = MessageBuffer()
-            cpu.l2.rspIn = MessageBuffer()
-            cpu.l2.datIn = MessageBuffer()
-
-            cpu.l2.reqOut.out_port = self._network.in_port
-            cpu.l2.rspOut.out_port = self._network.in_port
-            cpu.l2.datOut.out_port = self._network.in_port
-            cpu.l2.reqIn.in_port = self._network.out_port
-            cpu.l2.rspIn.in_port = self._network.out_port
-            cpu.l2.datIn.in_port = self._network.out_port
+            self.connectController(cpu.l2)
 
             # L1 controllers now send downstream to OurL2
             for c in cpu._ll_cntrls:
