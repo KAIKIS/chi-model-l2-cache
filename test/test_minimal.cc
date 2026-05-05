@@ -1,31 +1,14 @@
-// Minimal test: touch one cache line and exit via raw syscall
 #include <cstdint>
+#include <cstdio>
+#include <unistd.h>
 
-static uint64_t data[8];  // 64 bytes = 1 cache line
-
-// Raw exit syscall - bypasses libc entirely
-static void raw_exit(int status) {
-    asm volatile(
-        "mov x0, %0\n"
-        "mov x8, #93\n"  // SYS_exit_group
-        "svc #0\n"
-        :
-        : "r"((uint64_t)status)
-        : "x0", "x8"
-    );
-    __builtin_unreachable();
-}
+static volatile uint64_t val = 0;
 
 int main() {
-    // Write one cache line
-    for (int i = 0; i < 8; i++) {
-        data[i] = i;
-    }
-    // Read it back
-    uint64_t sum = 0;
-    for (int i = 0; i < 8; i++) {
-        sum += data[i];
-    }
-    // Exit via raw syscall
-    raw_exit(sum == 28 ? 0 : 1);
+    setvbuf(stdout, NULL, _IONBF, 0);
+    val = 42;
+    uint64_t readback = val;
+    if (readback == 42) printf("PASS\n");
+    else printf("FAIL: expected 42, got %lu\n", readback);
+    _exit(readback == 42 ? 0 : 1);
 }

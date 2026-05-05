@@ -1,0 +1,19 @@
+Import('*')
+
+# Only build when CHI protocol is selected
+if env['CONF'].get('PROTOCOL', '') != 'CHI' and \
+   not env['CONF'].get('RUBY_PROTOCOL_CHI', False):
+    Return()
+
+SimObject('OurL2Middleware.py', sim_objects=['OurL2Middleware'])
+
+Source('our_l2_middleware.cc')
+
+# Add CHI-new model include paths (relative to gem5 root)
+chi_new_root = Dir('#..').abspath
+env.Append(CPPPATH=[chi_new_root + '/chi_model/include'])
+env.Append(CPPPATH=[chi_new_root + '/cache_model/include'])
+
+# Add CHI-new model source files
+Source(chi_new_root + '/cache_model/src/l2_cache.cc')
+Source(chi_new_root + '/cache_model/src/chi_protocol_engine.cc')

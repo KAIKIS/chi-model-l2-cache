@@ -1,4 +1,10 @@
+# Track only our custom gem5 middleware files; ignore the rest of gem5
 gem5/*
+!gem5/src/
+gem5/src/*
+!gem5/src/mem/
+gem5/src/mem/*
+!gem5/src/mem/my_l2/
 build/*
 build-aarch64/*
 *.o

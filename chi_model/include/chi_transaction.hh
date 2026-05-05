@@ -17,10 +17,6 @@ struct ChiTransaction {
     TxnID       returnTxnID = 0;
     std::vector<uint8_t> data;
     RespStatus  respStatus  = RespStatus::OK;
-
-    bool isRequest() const;
-    bool isResponse() const;
-    bool needsSNForward() const;
 };
 
 } // namespace chi

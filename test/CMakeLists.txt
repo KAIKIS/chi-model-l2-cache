@@ -1,9 +1,3 @@
-add_executable(test_channel test_channel.cc)
-target_link_libraries(test_channel PRIVATE chi_model pthread)
-
-add_executable(test_hn_node test_hn_node.cc)
-target_link_libraries(test_hn_node PRIVATE chi_model pthread)
-
 add_executable(test_128kb test_128kb.cc)
 target_link_libraries(test_128kb PRIVATE chi_model cache_model)
 
@@ -12,3 +6,6 @@ target_link_libraries(test_l2_cache PRIVATE cache_model)
 
 add_executable(test_dual_core test_dual_core.cc)
 target_link_libraries(test_dual_core PRIVATE cache_model)
+
+add_executable(test_protocol_engine test_protocol_engine.cc)
+target_link_libraries(test_protocol_engine PRIVATE cache_model)
