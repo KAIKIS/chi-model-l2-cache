@@ -314,7 +314,8 @@ std::vector<ProtocolAction> ChiProtocolEngine::handleWriteBackFull(
 std::vector<ProtocolAction> ChiProtocolEngine::recvData(
     TxnID txnId, Addr addr, const uint8_t* data)
 {
-    // Snoop writeback data?
+    // Snoop writeback data (SnpRespData_* on datIn)?
+    // SnpRespData combines data and response — no separate SnpResp on rspIn.
     {
         auto it = snoopToOrig_.find(txnId);
         if (it != snoopToOrig_.end()) {
@@ -323,8 +324,17 @@ std::vector<ProtocolAction> ChiProtocolEngine::recvData(
             if (pit != pending_.end()) {
                 cache_->fill(pit->second.origReq.addr, pit->second.targetState, data);
                 pit->second.pendingSnoopDataCount--;
+
+                // First SnpRespData beat for this txnId also counts as the
+                // snoop response (combined data+response on dat channel).
+                if (snoopRespCounted_.find(txnId) == snoopRespCounted_.end()) {
+                    pit->second.pendingSnoopCount--;
+                    snoopRespCounted_.insert(txnId);
+                }
+
                 if (pit->second.pendingSnoopCount <= 0 &&
                     pit->second.pendingSnoopDataCount <= 0) {
+                    snoopRespCounted_.erase(txnId);
                     return completePending(origId);
                 }
             }
@@ -412,11 +422,6 @@ std::vector<ProtocolAction> ChiProtocolEngine::recvResponse(
                 pit->second.pendingSnoopCount--;
                 if (pit->second.pendingSnoopCount <= 0 &&
                     pit->second.pendingSnoopDataCount <= 0) {
-                    // Clean up all snoopToOrig_ entries for this origin txn
-                    for (auto si = snoopToOrig_.begin(); si != snoopToOrig_.end(); ) {
-                        if (si->second == origId) si = snoopToOrig_.erase(si);
-                        else ++si;
-                    }
                     return completePending(origId);
                 }
             }
@@ -424,16 +429,23 @@ std::vector<ProtocolAction> ChiProtocolEngine::recvResponse(
         }
     }
 
-    // Memory WriteAck or CompAck — just erase pending
+    // Non-snoop response — only erase entries that are waiting for a write ack.
+    // WaitMemData entries must stay pending so recvData can find them when the
+    // actual data arrives. Data-carrying responses (Comp_UC, Comp_SC, etc.) are
+    // handled by recvResponseMsg routing them to recvData instead of here.
     {
         auto it = pending_.find(txnId);
         if (it != pending_.end()) {
-            pending_.erase(it);
-            for (auto mi = memToOrig_.begin(); mi != memToOrig_.end(); ) {
-                if (mi->second == txnId || mi->first == txnId)
-                    mi = memToOrig_.erase(mi);
-                else ++mi;
+            if (it->second.state == PendingState::WaitMemWriteAck) {
+                pending_.erase(it);
+                for (auto mi = memToOrig_.begin(); mi != memToOrig_.end(); ) {
+                    if (mi->second == txnId || mi->first == txnId)
+                        mi = memToOrig_.erase(mi);
+                    else ++mi;
+                }
             }
+            // WaitMemData / WaitL1Data entries: data is handled by recvData.
+            // Do not erase — the data response may arrive later on datIn.
         }
     }
 
@@ -448,6 +460,15 @@ std::vector<ProtocolAction> ChiProtocolEngine::completePending(TxnID origTxnId)
 {
     auto it = pending_.find(origTxnId);
     if (it == pending_.end()) return {};
+
+    // Clean up snoop tracking — completion may be triggered from either
+    // recvData (SnpRespData on datIn) or recvResponse (SnpResp on rspIn).
+    for (auto si = snoopToOrig_.begin(); si != snoopToOrig_.end(); ) {
+        if (si->second == origTxnId) {
+            snoopRespCounted_.erase(si->first);
+            si = snoopToOrig_.erase(si);
+        } else ++si;
+    }
 
     PendingTxn& pt = it->second;
     Addr addr = pt.origReq.addr;

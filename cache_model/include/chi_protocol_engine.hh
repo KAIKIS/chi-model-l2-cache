@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace chi {
@@ -73,6 +74,11 @@ private:
     // snoop/memory txnId to original L1 txnId
     std::unordered_map<TxnID, TxnID> snoopToOrig_;
     std::unordered_map<TxnID, TxnID> memToOrig_;
+
+    // SnpRespData_* on datIn carries both data and response. Track which
+    // snoop txnIds have already had their response counted so we don't
+    // double-count across multiple data beats.
+    std::unordered_set<TxnID> snoopRespCounted_;
 
     // txnId ranges to avoid collision with gem5-assigned txnIds (0–63):
     TxnID nextSnoopTxnId_    = 10000;  // txnIds for SnpCleanInvalid messages

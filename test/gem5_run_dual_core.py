@@ -1,13 +1,18 @@
 """
-Run test_128kb through gem5 with OurL2Middleware (CHI Ruby network).
+Run dual-core shared-L2 test through gem5 with OurL2Middleware (CHI Ruby).
 
 Architecture:
-    ARM CPU -> L1 (CHI/MOESI) -> Network -> OurL2Middleware -> MemoryController
+    2x ARM CPU -> L1 (CHI/MOESI) -> Network -> OurL2Middleware -> MemoryController
+
+Uses set_se_binary_workload to assign the SAME Process to both cores. Both cores
+share the same virtual address space (global variables map to the same physical
+pages). A post-instantiation hook activates Core 1's ThreadContext so both cores
+start executing simultaneously.
 
 Usage:
     cd CHI-new/gem5
     scons build/ARM/gem5.opt -j$(nproc)
-    ./build/ARM/gem5.opt ../test/gem5_run_128kb.py
+    ./build/ARM/gem5.opt ../test/gem5_run_dual_core.py
 """
 
 from itertools import chain
@@ -54,8 +59,7 @@ from gem5.utils.requires import requires
 from gem5.utils.override import overrides
 
 
-class SingleCoreL2Hierarchy(AbstractRubyCacheHierarchy):
-    """CHI hierarchy with OurL2Middleware for single-core."""
+class DualCoreL2Hierarchy(AbstractRubyCacheHierarchy):
 
     def __init__(self) -> None:
         super().__init__()
@@ -77,13 +81,11 @@ class SingleCoreL2Hierarchy(AbstractRubyCacheHierarchy):
         self.ruby_system.number_of_virtual_networks = 4
         self.ruby_system.network.number_of_virtual_networks = 4
 
-        # Create L1 clusters
         self.core_clusters = [
             self._create_core_cluster(core, i, board)
             for i, core in enumerate(board.get_processor().get_cores())
         ]
 
-        # OurL2Middleware (Home Node)
         network = self.ruby_system.network
         self.directory = OurL2Middleware(
             version=AbstractNode._version,
@@ -92,15 +94,9 @@ class SingleCoreL2Hierarchy(AbstractRubyCacheHierarchy):
         )
         self.directory.ruby_system = self.ruby_system
 
-        # MessageBuffers
-        self.directory.reqOut = MessageBuffer()
-        self.directory.rspOut = MessageBuffer()
-        self.directory.snpOut = MessageBuffer()
-        self.directory.datOut = MessageBuffer()
-        self.directory.reqIn = MessageBuffer()
-        self.directory.rspIn = MessageBuffer()
-        self.directory.snpIn = MessageBuffer()
-        self.directory.datIn = MessageBuffer()
+        for port_name in ("reqOut", "rspOut", "snpOut", "datOut",
+                          "reqIn", "rspIn", "snpIn", "datIn"):
+            setattr(self.directory, port_name, MessageBuffer())
 
         self.directory.reqOut.out_port = network.in_port
         self.directory.rspOut.out_port = network.in_port
@@ -112,25 +108,19 @@ class SingleCoreL2Hierarchy(AbstractRubyCacheHierarchy):
         self.directory.datIn.in_port = network.out_port
         self.directory.clk_domain = board.get_clock_domain()
 
-        # L1 downstream -> OurL2Middleware
         for cluster in self.core_clusters:
             cluster.dcache.downstream_destinations = [self.directory]
             cluster.icache.downstream_destinations = [self.directory]
 
-        # Memory Controller
         self.memory_controllers = self._create_memory_controllers(board)
         self.directory.downstream_destinations = self.memory_controllers
 
         self.ruby_system.num_of_sequencers = len(self.core_clusters) * 2
 
-        # Connect network
         self.ruby_system.network.connectControllers(
             list(
                 chain.from_iterable(
-                    [
-                        (cluster.dcache, cluster.icache)
-                        for cluster in self.core_clusters
-                    ]
+                    [(c.dcache, c.icache) for c in self.core_clusters]
                 )
             )
             + self.memory_controllers
@@ -138,7 +128,6 @@ class SingleCoreL2Hierarchy(AbstractRubyCacheHierarchy):
         )
         self.ruby_system.network.setup_buffers()
 
-        # System port proxy
         self.ruby_system.sys_port_proxy = RubyPortProxy(
             ruby_system=self.ruby_system
         )
@@ -168,11 +157,13 @@ class SingleCoreL2Hierarchy(AbstractRubyCacheHierarchy):
             version=core_num, dcache=NULL,
             clk_domain=cluster.icache.clk_domain,
             ruby_system=self.ruby_system,
+            deadlock_threshold=50000000,
         )
         cluster.dcache.sequencer = RubySequencer(
             version=core_num, dcache=cluster.dcache.cache,
             clk_domain=cluster.dcache.clk_domain,
             ruby_system=self.ruby_system,
+            deadlock_threshold=50000000,
         )
 
         if board.has_io_bus():
@@ -191,12 +182,12 @@ class SingleCoreL2Hierarchy(AbstractRubyCacheHierarchy):
         return cluster
 
     def _create_memory_controllers(self, board):
-        memory_controllers = []
+        mcs = []
         for rng, port in board.get_mem_ports():
             mc = MemoryController(self.ruby_system.network, [rng], port)
             mc.ruby_system = self.ruby_system
-            memory_controllers.append(mc)
-        return memory_controllers
+            mcs.append(mc)
+        return mcs
 
 
 # --- Main ---
@@ -205,13 +196,13 @@ requires(
     coherence_protocol_required=CoherenceProtocol.CHI,
 )
 
-cache_hierarchy = SingleCoreL2Hierarchy()
+cache_hierarchy = DualCoreL2Hierarchy()
 memory = SingleChannelDDR3_1600(size="256MiB")
 
 processor = SimpleProcessor(
     cpu_type=CPUTypes.TIMING,
     isa=ISA.ARM,
-    num_cores=1,
+    num_cores=2,
 )
 
 board = SimpleBoard(
@@ -221,21 +212,21 @@ board = SimpleBoard(
     cache_hierarchy=cache_hierarchy,
 )
 
-# Path to test binary (relative to gem5 root)
 import os as _os
-_script_dir = _os.path.dirname(_os.path.abspath(__file__))
-_binary = _os.path.normpath(_os.path.join(_script_dir, "..", "build-aarch64", "test_128kb"))
 from gem5.resources.resource import BinaryResource
 
-board.set_se_binary_workload(binary=BinaryResource(_binary))
+BP = _os.path.normpath(_os.path.join(
+    _os.path.dirname(_os.path.abspath(__file__)), "..", "build-aarch64"))
+board.set_se_binary_workload(
+    binary=BinaryResource(f"{BP}/test_pthread_min"),
+)
 
 print("=" * 60)
-print("Single-core test_128kb via OurL2Middleware (CHI Ruby)")
-print(f"Binary: {_binary}")
-print("Architecture: CPU -> L1(CHI/MOESI) -> Network -> OurL2Middleware -> Memory")
+print("Dual-core shared-L2 via OurL2Middleware (CHI Ruby)")
+print("Architecture: 2x CPU -> L1(CHI/MOESI) -> Network -> OurL2Middleware -> Mem")
 print("=" * 60)
 
-simulator = Simulator(board=board, max_ticks=50_000_000_000_000)
+simulator = Simulator(board=board, max_ticks=100_000_000_000_000)
 simulator.run()
 
 print("=" * 60)

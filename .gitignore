@@ -9,5 +9,6 @@ build/*
 build-aarch64/*
 *.o
 m5out/
+m5out*/
 __pycache__/
 test/test_*_aarch64

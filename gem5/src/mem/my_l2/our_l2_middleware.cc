@@ -26,6 +26,87 @@ OurL2Middleware::OurL2Middleware(const OurL2MiddlewareParams &p)
 
 OurL2Middleware::~OurL2Middleware() {}
 
+void
+OurL2Middleware::wakeup()
+{
+    // Delegate to parent: CHIGenericController::wakeup() processes all four
+    // input ports (rspIn, datIn, snpIn, reqIn) via virtual recv* methods, and
+    // reschedules only when work is pending. Consumer callbacks on input
+    // buffers trigger wakeups when new messages arrive.
+    CHIGenericController::wakeup();
+
+    // Process deferred trigger actions (send retries)
+    bool pending = processTriggerQueue();
+
+    if (pending) {
+        scheduleEvent(Cycles(1));
+    }
+}
+
+bool
+OurL2Middleware::trySendRequest(std::shared_ptr<CHIRequestMsg> msg)
+{
+    if (sendRequestMsg(msg)) return true;
+    triggerQueue_.push({TriggerAction::RetrySendRequest, msg, nullptr, nullptr});
+    return false;
+}
+
+bool
+OurL2Middleware::trySendResponse(std::shared_ptr<CHIResponseMsg> msg)
+{
+    if (sendResponseMsg(msg)) return true;
+    triggerQueue_.push({TriggerAction::RetrySendResponse, nullptr, msg, nullptr});
+    return false;
+}
+
+bool
+OurL2Middleware::trySendData(std::shared_ptr<CHIDataMsg> msg)
+{
+    if (sendDataMsg(msg)) return true;
+    triggerQueue_.push({TriggerAction::RetrySendData, nullptr, nullptr, msg});
+    return false;
+}
+
+bool
+OurL2Middleware::trySendSnoop(std::shared_ptr<CHIRequestMsg> msg)
+{
+    if (sendSnoopMsg(msg)) return true;
+    triggerQueue_.push({TriggerAction::RetrySendSnoop, msg, nullptr, nullptr});
+    return false;
+}
+
+bool
+OurL2Middleware::processTriggerQueue()
+{
+    bool processed = false;
+    while (!triggerQueue_.empty()) {
+        TriggerAction& ta = triggerQueue_.front();
+        bool ok = false;
+        switch (ta.type) {
+          case TriggerAction::RetrySendRequest:
+            ok = sendRequestMsg(ta.reqMsg);
+            break;
+          case TriggerAction::RetrySendResponse:
+            ok = sendResponseMsg(ta.rspMsg);
+            break;
+          case TriggerAction::RetrySendData:
+            ok = sendDataMsg(ta.datMsg);
+            break;
+          case TriggerAction::RetrySendSnoop:
+            ok = sendSnoopMsg(ta.reqMsg);
+            break;
+        }
+        if (ok) {
+            triggerQueue_.pop();
+            processed = true;
+        } else {
+            // Output buffer still full — keep in queue, stop processing
+            return true;
+        }
+    }
+    return processed;
+}
+
 // ---- Opcode mapping ----
 
 chi::Opcode OurL2Middleware::gem5ToOpcode(CHIRequestType type)
@@ -110,10 +191,11 @@ bool OurL2Middleware::recvResponseMsg(const CHIResponseMsg *msg)
 {
     CHIResponseType type = msg->gettype();
     chi::TxnID txnId = msg->gettxnId();
+    Addr addr = msg->getaddr();
 
     cprintf("%s: [OurL2] Resp %s addr=%#x txnId=%d\n",
             name(), CHIResponseType_to_string(type).c_str(),
-            msg->getaddr(), txnId);
+            addr, txnId);
 
     // CompAck from L1: consume silently (Engine doesn't track these)
     if (type == CHIResponseType_CompAck) {
@@ -207,7 +289,7 @@ void OurL2Middleware::sendCompData(
         dat->setusesTxnId(false);
         dat->settxnId(txnId);
 
-        sendDataMsg(dat);
+        trySendData(dat);
     }
 }
 
@@ -226,7 +308,7 @@ void OurL2Middleware::sendComp(
     rsp->setDestination(destNet);
     rsp->setusesTxnId(false);
     rsp->settxnId(txnId);
-    sendResponseMsg(rsp);
+    trySendResponse(rsp);
 }
 
 // --- Helper: send ReadNoSnp to memory (non-DMT) ---
@@ -245,7 +327,7 @@ void OurL2Middleware::sendReadNoSnp(Addr addr, chi::TxnID txnId)
     req->settxnId(txnId);
     req->setaccAddr(addr);
     req->setaccSize(cacheLineSize);
-    sendRequestMsg(req);
+    trySendRequest(req);
 }
 
 // --- Helper: send WriteNoSnp to memory ---
@@ -266,7 +348,7 @@ void OurL2Middleware::sendWriteNoSnp(Addr addr, const uint8_t* data, chi::TxnID 
     req->setaccSize(cacheLineSize);
 
     // WriteNoSnp also needs data - send via separate data message
-    sendRequestMsg(req);
+    trySendRequest(req);
 
     // Send write data on data channel in dataMsgsPerLine beats
     for (int beat = 0; beat < dataMsgsPerLine; beat++) {
@@ -283,7 +365,7 @@ void OurL2Middleware::sendWriteNoSnp(Addr addr, const uint8_t* data, chi::TxnID 
         dat->setbitMask(bitmask);
         dat->setusesTxnId(false);
         dat->settxnId(txnId);
-        sendDataMsg(dat);
+        trySendData(dat);
     }
 }
 
@@ -301,7 +383,7 @@ void OurL2Middleware::sendCompDBIDResp(
     rsp->setDestination(destNet);
     rsp->setusesTxnId(false);
     rsp->settxnId(txnId);
-    sendResponseMsg(rsp);
+    trySendResponse(rsp);
 }
 
 // --- Helper: send SnpCleanInvalid to RN-F ---
@@ -322,7 +404,7 @@ void OurL2Middleware::sendSnpCleanInvalid(
     snp->setretToSrc(retToSrc);
     snp->setaccAddr(addr);
     snp->setaccSize(cacheLineSize);
-    sendSnoopMsg(snp);
+    trySendSnoop(snp);
 }
 
 } // namespace ruby
