@@ -69,6 +69,10 @@ class OurL2Middleware : public CHIGenericController
     void sendCompDBIDResp(const MachineID& dest, Addr addr, chi::TxnID txnId);
     void sendSnpCleanInvalid(Addr addr, const MachineID& target,
                              chi::TxnID txnId, bool retToSrc);
+    void sendSnpUnique(Addr addr, const MachineID& target,
+                       chi::TxnID txnId, bool retToSrc);
+    void sendSnpNotSharedDirty(Addr addr, const MachineID& target,
+                               chi::TxnID txnId, bool retToSrc);
 
     uint64_t requestCount;
 };

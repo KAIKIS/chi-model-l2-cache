@@ -14,12 +14,14 @@ namespace chi {
 // Middleware translates each ProtocolAction into gem5 message sends.
 struct ProtocolAction {
     enum Type : uint8_t {
-        SendReadNoSnp,        // Send ReadNoSnp to memory
-        SendWriteNoSnp,       // Send WriteNoSnp + NCBWrData to memory
-        SendCompData,         // Send CompData to RN-F (with data + state)
-        SendComp,             // Send Comp to RN-F (no data)
-        SendCompDBIDResp,     // Ask RN-F to send writeback data
-        SendSnpCleanInvalid,  // Send SnpCleanInvalid to an RN-F
+        SendReadNoSnp,           // Send ReadNoSnp to memory
+        SendWriteNoSnp,          // Send WriteNoSnp + NCBWrData to memory
+        SendCompData,            // Send CompData to RN-F (with data + state)
+        SendComp,                // Send Comp to RN-F (no data)
+        SendCompDBIDResp,        // Ask RN-F to send writeback data
+        SendSnpCleanInvalid,     // Send SnpCleanInvalid to an RN-F
+        SendSnpUnique,           // Send SnpUnique to an RN-F (for ReadUnique)
+        SendSnpNotSharedDirty,   // Send SnpNotSharedDirty to an RN-F (for CleanUnique SD)
     };
 
     Type      type;
@@ -85,19 +87,25 @@ private:
     TxnID nextInternalTxnId_ = 20000;  // txnIds for ReadNoSnp/WriteNoSnp to memory
 
     // Stats
-    uint64_t readSharedReqs_  = 0;
-    uint64_t readUniqueReqs_  = 0;
-    uint64_t cleanUniqueReqs_ = 0;
-    uint64_t writeBackReqs_   = 0;
-    uint64_t evictCount_      = 0;
-    uint64_t hitCount_        = 0;
-    uint64_t missCount_       = 0;
+    uint64_t readSharedReqs_         = 0;
+    uint64_t readUniqueReqs_         = 0;
+    uint64_t cleanUniqueReqs_        = 0;
+    uint64_t writeBackReqs_          = 0;
+    uint64_t readNotSharedDirtyReqs_ = 0;
+    uint64_t writeUniqueFullReqs_    = 0;
+    uint64_t writeEvictFullReqs_     = 0;
+    uint64_t evictCount_             = 0;
+    uint64_t hitCount_               = 0;
+    uint64_t missCount_              = 0;
 
     // Per-opcode request handlers
     std::vector<ProtocolAction> handleReadShared(const ChiTransaction& txn);
     std::vector<ProtocolAction> handleReadUnique(const ChiTransaction& txn);
     std::vector<ProtocolAction> handleCleanUnique(const ChiTransaction& txn);
     std::vector<ProtocolAction> handleWriteBackFull(const ChiTransaction& txn);
+    std::vector<ProtocolAction> handleReadNotSharedDirty(const ChiTransaction& txn);
+    std::vector<ProtocolAction> handleWriteUniqueFull(const ChiTransaction& txn);
+    std::vector<ProtocolAction> handleWriteEvictFull(const ChiTransaction& txn);
 
     // Complete a pending transaction after all snoops/data received
     std::vector<ProtocolAction> completePending(TxnID origTxnId);

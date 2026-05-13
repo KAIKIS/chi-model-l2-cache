@@ -102,10 +102,10 @@ static void test_ReadUnique_Hit_WithOtherSharers() {
 
     auto actions = engine.recvRequest(makeReq(Opcode::ReadUnique, addr, 0, 1));
     assert(actions.size() == 1);
-    assert(actions[0].type == ProtocolAction::SendSnpCleanInvalid);
+    assert(actions[0].type == ProtocolAction::SendSnpUnique);
     assert(actions[0].destNode == 1);
     assert(actions[0].retToSrc == false);
-    std::cout << "  PASS: ReadUnique with other sharer -> SendSnpCleanInvalid\n";
+    std::cout << "  PASS: ReadUnique with other sharer -> SendSnpUnique\n";
 }
 
 static void test_ReadUnique_Snoop_Then_Complete() {
@@ -121,8 +121,8 @@ static void test_ReadUnique_Snoop_Then_Complete() {
 
     auto actions1 = engine.recvRequest(makeReq(Opcode::ReadUnique, addr, 0, 1));
     assert(actions1.size() == 2);
-    assert(actions1[0].type == ProtocolAction::SendSnpCleanInvalid);
-    assert(actions1[1].type == ProtocolAction::SendSnpCleanInvalid);
+    assert(actions1[0].type == ProtocolAction::SendSnpUnique);
+    assert(actions1[1].type == ProtocolAction::SendSnpUnique);
 
     auto actions2 = engine.recvResponse(actions1[0].txnId, RespStatus::OK);
     assert(actions2.empty());
@@ -132,6 +132,178 @@ static void test_ReadUnique_Snoop_Then_Complete() {
     assert(actions3[0].type == ProtocolAction::SendCompData);
     assert(actions3[0].respState == LineState::UD);
     std::cout << "  PASS: ReadUnique snoop complete -> SendCompData UD\n";
+}
+
+// ---- ReadNotSharedDirty tests ----
+
+static void test_ReadNotSharedDirty_Miss() {
+    L2Cache cache;
+    ChiProtocolEngine engine(&cache);
+    Addr addr = 0x20000;
+
+    auto actions = engine.recvRequest(makeReq(Opcode::ReadNotSharedDirty, addr, 0, 1));
+    assert(actions.size() == 1);
+    assert(actions[0].type == ProtocolAction::SendReadNoSnp);
+    assert(actions[0].addr == addr);
+    std::cout << "  PASS: ReadNotSharedDirty miss -> SendReadNoSnp\n";
+}
+
+static void test_ReadNotSharedDirty_Hit_SoleSharer() {
+    L2Cache cache;
+    ChiProtocolEngine engine(&cache);
+    Addr addr = 0x20000;
+
+    uint8_t data[64];
+    fillPattern(data, 0xAB);
+    cache.fill(addr, LineState::UC, data);
+    cache.addSharer(addr, 0);
+
+    auto actions = engine.recvRequest(makeReq(Opcode::ReadNotSharedDirty, addr, 0, 1));
+    assert(actions.size() == 1);
+    assert(actions[0].type == ProtocolAction::SendCompData);
+    assert(actions[0].respState == LineState::UD);
+    assert(cache.getState(addr) == LineState::UD);
+    std::cout << "  PASS: ReadNotSharedDirty sole sharer -> SendCompData UD\n";
+}
+
+static void test_ReadNotSharedDirty_Hit_WithSharers() {
+    L2Cache cache;
+    ChiProtocolEngine engine(&cache);
+    Addr addr = 0x20000;
+
+    uint8_t data[64];
+    cache.fill(addr, LineState::SC, data);
+    cache.addSharer(addr, 0);
+    cache.addSharer(addr, 1);
+
+    auto actions = engine.recvRequest(makeReq(Opcode::ReadNotSharedDirty, addr, 0, 1));
+    assert(actions.size() == 1);
+    assert(actions[0].type == ProtocolAction::SendSnpUnique);
+    assert(actions[0].destNode == 1);
+    std::cout << "  PASS: ReadNotSharedDirty with sharer -> SendSnpUnique\n";
+}
+
+static void test_ReadNotSharedDirty_Snoop_Complete() {
+    L2Cache cache;
+    ChiProtocolEngine engine(&cache);
+    Addr addr = 0x20000;
+
+    uint8_t data[64];
+    cache.fill(addr, LineState::SC, data);
+    cache.addSharer(addr, 0);
+    cache.addSharer(addr, 1);
+
+    auto actions1 = engine.recvRequest(makeReq(Opcode::ReadNotSharedDirty, addr, 0, 1));
+    assert(actions1.size() == 1);
+    assert(actions1[0].type == ProtocolAction::SendSnpUnique);
+
+    auto actions2 = engine.recvResponse(actions1[0].txnId, RespStatus::OK);
+    assert(actions2.size() == 1);
+    assert(actions2[0].type == ProtocolAction::SendCompData);
+    assert(actions2[0].respState == LineState::UD);
+    std::cout << "  PASS: ReadNotSharedDirty snoop complete -> SendCompData UD\n";
+}
+
+static void test_ReadNotSharedDirty_Miss_Then_Data() {
+    L2Cache cache;
+    ChiProtocolEngine engine(&cache);
+    Addr addr = 0x20000;
+
+    auto actions1 = engine.recvRequest(makeReq(Opcode::ReadNotSharedDirty, addr, 0, 1));
+    assert(actions1[0].type == ProtocolAction::SendReadNoSnp);
+    TxnID memId = actions1[0].txnId;
+
+    uint8_t data[64];
+    fillPattern(data, 0x77);
+    auto actions2 = engine.recvData(memId, addr, data);
+    assert(actions2.size() == 1);
+    assert(actions2[0].type == ProtocolAction::SendCompData);
+    assert(actions2[0].respState == LineState::UD);
+    assert(cache.getState(addr) == LineState::UD);
+    std::cout << "  PASS: ReadNotSharedDirty miss -> recvData -> SendCompData UD\n";
+}
+
+// ---- WriteUniqueFull tests ----
+
+static void test_WriteUniqueFull() {
+    L2Cache cache;
+    ChiProtocolEngine engine(&cache);
+    Addr addr = 0x30000;
+
+    auto actions = engine.recvRequest(makeReq(Opcode::WriteUniqueFull, addr, 0, 1));
+    assert(actions.size() == 1);
+    assert(actions[0].type == ProtocolAction::SendCompDBIDResp);
+    assert(actions[0].destNode == 0);
+    std::cout << "  PASS: WriteUniqueFull -> SendCompDBIDResp\n";
+}
+
+static void test_WriteUniqueFull_Then_Data() {
+    L2Cache cache;
+    ChiProtocolEngine engine(&cache);
+    Addr addr = 0x30000;
+
+    auto actions1 = engine.recvRequest(makeReq(Opcode::WriteUniqueFull, addr, 0, 1));
+    assert(actions1[0].type == ProtocolAction::SendCompDBIDResp);
+
+    uint8_t dirty[64];
+    fillPattern(dirty, 0xEE);
+    auto actions2 = engine.recvData(0, addr, dirty);
+    assert(actions2.empty());
+    assert(cache.getState(addr) == LineState::UD);
+    std::cout << "  PASS: WriteUniqueFull -> CompDBIDResp -> recvData -> UD\n";
+}
+
+// ---- WriteEvictFull tests ----
+
+static void test_WriteEvictFull() {
+    L2Cache cache;
+    ChiProtocolEngine engine(&cache);
+    Addr addr = 0x40000;
+
+    auto actions = engine.recvRequest(makeReq(Opcode::WriteEvictFull, addr, 0, 1));
+    assert(actions.size() == 1);
+    assert(actions[0].type == ProtocolAction::SendCompDBIDResp);
+    assert(actions[0].destNode == 0);
+    std::cout << "  PASS: WriteEvictFull -> SendCompDBIDResp\n";
+}
+
+// ---- CleanUnique with SnpNotSharedDirty test ----
+
+static void test_CleanUnique_SD_Uses_SnpNotSharedDirty() {
+    L2Cache cache;
+    ChiProtocolEngine engine(&cache);
+    Addr addr = 0x50000;
+
+    uint8_t data[64];
+    fillPattern(data, 0x99);
+    cache.fill(addr, LineState::SD, data);
+    cache.addSharer(addr, 0);  // requester
+    cache.addSharer(addr, 1);  // other sharer
+
+    auto actions = engine.recvRequest(makeReq(Opcode::CleanUnique, addr, 0, 1));
+    assert(actions.size() == 1);
+    assert(actions[0].type == ProtocolAction::SendSnpNotSharedDirty);
+    assert(actions[0].destNode == 1);
+    assert(actions[0].retToSrc == true);  // SD needs data back
+    std::cout << "  PASS: CleanUnique SD -> SendSnpNotSharedDirty\n";
+}
+
+static void test_CleanUnique_SC_StillUses_SnpCleanInvalid() {
+    L2Cache cache;
+    ChiProtocolEngine engine(&cache);
+    Addr addr = 0x60000;
+
+    uint8_t data[64];
+    fillPattern(data, 0x88);
+    cache.fill(addr, LineState::SC, data);
+    cache.addSharer(addr, 0);
+    cache.addSharer(addr, 1);
+
+    auto actions = engine.recvRequest(makeReq(Opcode::CleanUnique, addr, 0, 1));
+    assert(actions.size() == 1);
+    assert(actions[0].type == ProtocolAction::SendSnpCleanInvalid);
+    assert(actions[0].retToSrc == false);  // SC: no data needed
+    std::cout << "  PASS: CleanUnique SC -> SendSnpCleanInvalid\n";
 }
 
 static void test_CleanUnique_UC_Hit() {
@@ -261,6 +433,16 @@ int main() {
     test_WriteBackFull_Then_Data();
     test_Evict();
     test_DuplicateData_Ignored();
+    test_ReadNotSharedDirty_Miss();
+    test_ReadNotSharedDirty_Hit_SoleSharer();
+    test_ReadNotSharedDirty_Hit_WithSharers();
+    test_ReadNotSharedDirty_Snoop_Complete();
+    test_ReadNotSharedDirty_Miss_Then_Data();
+    test_WriteUniqueFull();
+    test_WriteUniqueFull_Then_Data();
+    test_WriteEvictFull();
+    test_CleanUnique_SD_Uses_SnpNotSharedDirty();
+    test_CleanUnique_SC_StillUses_SnpCleanInvalid();
     std::cout << "All ChiProtocolEngine tests passed!\n";
     return 0;
 }
