@@ -51,7 +51,7 @@ struct PendingTxn {
 
 class ChiProtocolEngine {
 public:
-    explicit ChiProtocolEngine(L2Cache* cache);
+    ChiProtocolEngine(L2Cache* cache, const char* label = "L2");
 
     // === Three entry points (synchronous) ===
     // Each returns actions the Middleware must execute.
@@ -69,6 +69,7 @@ public:
 
 private:
     L2Cache* cache_;
+    const char* label_;
 
     // Pending transactions keyed by original L1 txnId
     std::unordered_map<TxnID, PendingTxn> pending_;
@@ -106,6 +107,7 @@ private:
     std::vector<ProtocolAction> handleReadNotSharedDirty(const ChiTransaction& txn);
     std::vector<ProtocolAction> handleWriteUniqueFull(const ChiTransaction& txn);
     std::vector<ProtocolAction> handleWriteEvictFull(const ChiTransaction& txn);
+    std::vector<ProtocolAction> handleWriteNoSnp(const ChiTransaction& txn);
 
     // Complete a pending transaction after all snoops/data received
     std::vector<ProtocolAction> completePending(TxnID origTxnId);

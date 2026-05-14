@@ -33,7 +33,7 @@ class OurL2Middleware : public CHIGenericController
     void wakeup() override;
 
   private:
-    chi::L2Cache                        cacheStorage_;
+    chi::L2Cache cacheStorage_;
     std::unique_ptr<chi::ChiProtocolEngine> engine_;
 
     chi::Opcode gem5ToOpcode(CHI::CHIRequestType type);

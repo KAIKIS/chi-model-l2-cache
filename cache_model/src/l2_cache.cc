@@ -1,30 +1,40 @@
 #include "l2_cache.hh"
 #include "chi_log.hh"
 #include <cassert>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
 namespace chi {
 
-// Address decomposition for 256KB cache, 64B lines, 512 sets
-// offset: bits [5:0]  (6 bits for 64B)
-// set:    bits [14:6]  (9 bits for 512 sets)
-// tag:    bits [63:15] (remaining bits)
+L2Cache::L2Cache(int numSets, int numWays)
+    : numSets_(numSets), numWays_(numWays)
+{
+    // numSets must be a power of 2 for correct address decomposition
+    assert((numSets & (numSets - 1)) == 0 && "numSets must be a power of 2");
 
-L2Cache::L2Cache() {
-    // CacheSet default-constructs all lines to state I
+    // Precompute address decomposition parameters
+    setBits_  = static_cast<unsigned>(std::log2(numSets));
+    setMask_  = (1u << setBits_) - 1;
+    tagShift_ = OFFSET_BITS + setBits_;
+
+    // Initialize all cache sets with the configured associativity
+    sets_.reserve(numSets);
+    for (int i = 0; i < numSets; i++) {
+        sets_.emplace_back(numWays);
+    }
 }
 
-uint64_t L2Cache::getTag(Addr addr) {
-    return addr >> 15;
+uint64_t L2Cache::getTag(Addr addr) const {
+    return addr >> tagShift_;
 }
 
-int L2Cache::getSetIndex(Addr addr) {
-    return (addr >> 6) & 0x1FF;  // 9 bits
+int L2Cache::getSetIndex(Addr addr) const {
+    return (addr >> OFFSET_BITS) & setMask_;
 }
 
-Addr L2Cache::makeAddr(uint64_t tag, int setIndex) {
-    return (tag << 15) | (setIndex << 6);
+Addr L2Cache::makeAddr(uint64_t tag, int setIndex) const {
+    return (tag << tagShift_) | (setIndex << OFFSET_BITS);
 }
 
 LookupResponse L2Cache::lookup(Addr addr) {

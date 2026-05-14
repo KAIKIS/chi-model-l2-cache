@@ -2,10 +2,10 @@
 
 #include "chi_types.hh"
 
-#include <array>
 #include <cstdint>
 #include <set>
 #include <cstring>
+#include <vector>
 
 namespace chi {
 
@@ -29,7 +29,6 @@ inline const char* lineStateToString(LineState s) {
 }
 
 constexpr int CACHE_LINE_SIZE = 64;
-constexpr int CACHE_WAYS = 8;
 
 struct CacheLine {
     uint64_t        tag   = 0;
@@ -51,12 +50,18 @@ struct CacheLine {
 };
 
 struct CacheSet {
-    std::array<CacheLine, CACHE_WAYS> lines;
-    std::array<int, CACHE_WAYS> lru = {0, 1, 2, 3, 4, 5, 6, 7};
+    int numWays;
+    std::vector<CacheLine> lines;
+    std::vector<int> lru;
+
+    explicit CacheSet(int ways) : numWays(ways), lines(ways) {
+        lru.resize(ways);
+        for (int i = 0; i < ways; i++) lru[i] = i;
+    }
 
     // Returns way index of hit, or -1 on miss
     int lookup(uint64_t tag) const {
-        for (int i = 0; i < CACHE_WAYS; i++) {
+        for (int i = 0; i < numWays; i++) {
             if (lines[i].isValid() && lines[i].tag == tag) {
                 return i;
             }
@@ -65,23 +70,21 @@ struct CacheSet {
     }
 
     // Update LRU after accessing way i:
-    // Move accessed way to MRU position (CACHE_WAYS - 1), compress remaining positions.
+    // Move accessed way to MRU position (numWays - 1), compress remaining positions.
     void touch(int way) {
         int old = lru[way];
-        for (int j = 0; j < CACHE_WAYS; j++) {
+        for (int j = 0; j < numWays; j++) {
             if (lru[j] > old) {
                 lru[j]--;
             }
         }
-        lru[way] = CACHE_WAYS - 1;
+        lru[way] = numWays - 1;
     }
 
     // Find way with lowest LRU value (least recently used).
-    // Precondition: caller must check findInvalid() first — this returns a valid line to evict.
-    // Ties broken by preferring higher way index.
     int victimWay() const {
         int best = 0;
-        for (int i = 1; i < CACHE_WAYS; i++) {
+        for (int i = 1; i < numWays; i++) {
             if (lru[i] <= lru[best]) {
                 best = i;
             }
@@ -91,7 +94,7 @@ struct CacheSet {
 
     // Find an invalid (empty) way, or -1 if full
     int findInvalid() const {
-        for (int i = 0; i < CACHE_WAYS; i++) {
+        for (int i = 0; i < numWays; i++) {
             if (!lines[i].isValid()) {
                 return i;
             }

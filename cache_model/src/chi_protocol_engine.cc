@@ -6,8 +6,8 @@
 
 namespace chi {
 
-ChiProtocolEngine::ChiProtocolEngine(L2Cache* cache)
-    : cache_(cache) {}
+ChiProtocolEngine::ChiProtocolEngine(L2Cache* cache, const char* label)
+    : cache_(cache), label_(label) {}
 
 ProtocolAction ChiProtocolEngine::makeAction(
     ProtocolAction::Type type, Addr addr, TxnID txnId)
@@ -34,6 +34,9 @@ std::vector<ProtocolAction> ChiProtocolEngine::recvRequest(
         case Opcode::ReadNotSharedDirty: readNotSharedDirtyReqs_++; return handleReadNotSharedDirty(txn);
         case Opcode::WriteUniqueFull:    writeUniqueFullReqs_++;    return handleWriteUniqueFull(txn);
         case Opcode::WriteEvictFull:     writeEvictFullReqs_++;     return handleWriteEvictFull(txn);
+        // SN-F requests from upstream HN-F: treat like cacheable requests
+        case Opcode::ReadNoSnp:          readSharedReqs_++;    return handleReadShared(txn);
+        case Opcode::WriteNoSnp:         writeBackReqs_++;     return handleWriteNoSnp(txn);
         default:
             // Unknown opcode — pass-through to memory
             {
@@ -419,6 +422,22 @@ std::vector<ProtocolAction> ChiProtocolEngine::handleWriteEvictFull(
 }
 
 // ============================================================
+// handleWriteNoSnp — store data from upstream HN-F (WriteNoSnp + NCBWrData)
+// Unlike WriteBackFull, we do NOT send CompDBIDResp — WriteNoSnp is a posted
+// write; the data arrives on datIn without a preceding data-request handshake.
+// ============================================================
+
+std::vector<ProtocolAction> ChiProtocolEngine::handleWriteNoSnp(
+    const ChiTransaction& txn)
+{
+    PendingTxn pt;
+    pt.origReq = txn;
+    pt.state = PendingState::WaitL1Data;
+    pending_[txn.txnID] = pt;
+    return {};  // Data arrives on datIn; recvData handles it
+}
+
+// ============================================================
 // recvData — data from memory, L1 writeback, or snoop writeback
 // ============================================================
 
@@ -618,25 +637,25 @@ void ChiProtocolEngine::printStats() const {
                      + evictCount_;
     uint64_t accesses = hitCount_ + missCount_;
 
-    printf("[L2 Stats] ============================================\n");
-    printf("[L2 Stats] Total requests:             %lu\n", total);
-    printf("[L2 Stats]   ReadShared:               %lu\n", readSharedReqs_);
-    printf("[L2 Stats]   ReadUnique:               %lu\n", readUniqueReqs_);
-    printf("[L2 Stats]   CleanUnique:              %lu\n", cleanUniqueReqs_);
-    printf("[L2 Stats]   WriteBackFull:            %lu\n", writeBackReqs_);
-    printf("[L2 Stats]   ReadNotSharedDirty:       %lu\n", readNotSharedDirtyReqs_);
-    printf("[L2 Stats]   WriteUniqueFull:          %lu\n", writeUniqueFullReqs_);
-    printf("[L2 Stats]   WriteEvictFull:           %lu\n", writeEvictFullReqs_);
-    printf("[L2 Stats]   Evict:                    %lu\n", evictCount_);
-    printf("[L2 Stats] ----------------------------------------\n");
-    printf("[L2 Stats] Cache lookups:              %lu\n", accesses);
-    printf("[L2 Stats]   Hit:                      %lu\n", hitCount_);
-    printf("[L2 Stats]   Miss:                     %lu\n", missCount_);
+    printf("[%s Stats] ============================================\n", label_);
+    printf("[%s Stats] Total requests:             %lu\n", label_, total);
+    printf("[%s Stats]   ReadShared:               %lu\n", label_, readSharedReqs_);
+    printf("[%s Stats]   ReadUnique:               %lu\n", label_, readUniqueReqs_);
+    printf("[%s Stats]   CleanUnique:              %lu\n", label_, cleanUniqueReqs_);
+    printf("[%s Stats]   WriteBackFull:            %lu\n", label_, writeBackReqs_);
+    printf("[%s Stats]   ReadNotSharedDirty:       %lu\n", label_, readNotSharedDirtyReqs_);
+    printf("[%s Stats]   WriteUniqueFull:          %lu\n", label_, writeUniqueFullReqs_);
+    printf("[%s Stats]   WriteEvictFull:           %lu\n", label_, writeEvictFullReqs_);
+    printf("[%s Stats]   Evict:                    %lu\n", label_, evictCount_);
+    printf("[%s Stats] ----------------------------------------\n");
+    printf("[%s Stats] Cache lookups:              %lu\n", label_, accesses);
+    printf("[%s Stats]   Hit:                      %lu\n", label_, hitCount_);
+    printf("[%s Stats]   Miss:                     %lu\n", label_, missCount_);
     if (accesses > 0) {
-        printf("[L2 Stats]   Hit rate:                 %.1f%%\n",
-               100.0 * hitCount_ / accesses);
+        printf("[%s Stats]   Hit rate:                 %.1f%%\n",
+               label_, 100.0 * hitCount_ / accesses);
     }
-    printf("[L2 Stats] ============================================\n");
+    printf("[%s Stats] ============================================\n", label_);
 }
 
 } // namespace chi

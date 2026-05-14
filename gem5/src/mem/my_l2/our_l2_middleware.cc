@@ -14,9 +14,11 @@ namespace ruby {
 using namespace CHI;
 
 OurL2Middleware::OurL2Middleware(const OurL2MiddlewareParams &p)
-    : CHIGenericController(p), requestCount(0)
+    : CHIGenericController(p),
+      cacheStorage_(p.l2_num_sets, p.l2_assoc),
+      requestCount(0)
 {
-    engine_ = std::make_unique<chi::ChiProtocolEngine>(&cacheStorage_);
+    engine_ = std::make_unique<chi::ChiProtocolEngine>(&cacheStorage_, "L2");
     std::cout << "[OurL2] Middleware initialized with ChiProtocolEngine"
               << " machineID=" << m_machineID << std::endl;
 

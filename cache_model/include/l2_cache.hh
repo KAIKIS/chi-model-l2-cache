@@ -2,13 +2,11 @@
 
 #include "cache_line.hh"
 
-#include <array>
 #include <cstdint>
+#include <set>
 #include <vector>
 
 namespace chi {
-
-constexpr int CACHE_SETS = 512;  // 512 sets × 8 ways × 64B = 256KB
 
 // Result of a cache lookup
 enum class LookupResult {
@@ -28,12 +26,14 @@ struct LookupResponse {
 
 class L2Cache {
 public:
-    L2Cache();
+    // numSets: number of cache sets (e.g. 512 for 256KB, 2048 for 2MB)
+    // numWays: associativity (e.g. 8 for L2, 16 for L3)
+    L2Cache(int numSets = 512, int numWays = 8);
 
     // Decompose address into tag, set index, offset
-    static uint64_t getTag(Addr addr);
-    static int      getSetIndex(Addr addr);
-    static Addr     makeAddr(uint64_t tag, int setIndex);
+    uint64_t getTag(Addr addr) const;
+    int      getSetIndex(Addr addr) const;
+    Addr     makeAddr(uint64_t tag, int setIndex) const;
 
     // Lookup a cache line
     LookupResponse lookup(Addr addr);
@@ -71,8 +71,19 @@ public:
     // Invalidate a cache line
     void invalidate(Addr addr);
 
+    int numSets() const { return numSets_; }
+    int numWays() const { return numWays_; }
+
 private:
-    std::array<CacheSet, CACHE_SETS> sets_;
+    int numSets_;
+    int numWays_;
+    unsigned setBits_;     // log2(numSets_)
+    unsigned setMask_;     // (1 << setBits_) - 1
+    unsigned tagShift_;    // offsetBits + setBits_
+
+    std::vector<CacheSet> sets_;
+
+    static constexpr unsigned OFFSET_BITS = 6;  // log2(CACHE_LINE_SIZE)
 };
 
 } // namespace chi
