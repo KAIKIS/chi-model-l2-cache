@@ -22,6 +22,8 @@ struct ProtocolAction {
         SendSnpCleanInvalid,     // Send SnpCleanInvalid to an RN-F
         SendSnpUnique,           // Send SnpUnique to an RN-F (for ReadUnique)
         SendSnpNotSharedDirty,   // Send SnpNotSharedDirty to an RN-F (for CleanUnique SD)
+        SendSnpOnce,             // Send SnpOnce to an RN-F (for ReadOnce)
+        SendSnpShared,           // Send SnpShared to an RN-F (share data, keep copy)
     };
 
     Type      type;
@@ -93,6 +95,7 @@ private:
     uint64_t cleanUniqueReqs_        = 0;
     uint64_t writeBackReqs_          = 0;
     uint64_t readNotSharedDirtyReqs_ = 0;
+    uint64_t readOnceReqs_           = 0;
     uint64_t writeUniqueFullReqs_    = 0;
     uint64_t writeEvictFullReqs_     = 0;
     uint64_t evictCount_             = 0;
@@ -105,6 +108,7 @@ private:
     std::vector<ProtocolAction> handleCleanUnique(const ChiTransaction& txn);
     std::vector<ProtocolAction> handleWriteBackFull(const ChiTransaction& txn);
     std::vector<ProtocolAction> handleReadNotSharedDirty(const ChiTransaction& txn);
+    std::vector<ProtocolAction> handleReadOnce(const ChiTransaction& txn);
     std::vector<ProtocolAction> handleWriteUniqueFull(const ChiTransaction& txn);
     std::vector<ProtocolAction> handleWriteEvictFull(const ChiTransaction& txn);
     std::vector<ProtocolAction> handleWriteNoSnp(const ChiTransaction& txn);

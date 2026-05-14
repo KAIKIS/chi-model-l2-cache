@@ -14,6 +14,7 @@ enum class Opcode : uint8_t {
     ReadNotSharedDirty = 0x04,
     WriteUniqueFull    = 0x05,
     WriteEvictFull     = 0x06,
+    ReadOnce           = 0x07,
 
     // SN 请求
     ReadNoSnp     = 0x10,
@@ -28,11 +29,15 @@ enum class Opcode : uint8_t {
     SnpCleanInvalid    = 0x30,
     SnpUnique          = 0x31,
     SnpNotSharedDirty  = 0x32,
+    SnpOnce            = 0x33,
+    SnpShared          = 0x34,
 
     // Snoop 响应
     SnpCleanInvalidResp    = 0x40,
     SnpUniqueResp          = 0x41,
     SnpNotSharedDirtyResp  = 0x42,
+    SnpOnceResp            = 0x43,
+    SnpSharedResp          = 0x44,
 };
 
 inline const char* opcodeToString(Opcode op) {
@@ -44,6 +49,7 @@ inline const char* opcodeToString(Opcode op) {
         case Opcode::ReadNotSharedDirty: return "ReadNotSharedDirty";
         case Opcode::WriteUniqueFull:    return "WriteUniqueFull";
         case Opcode::WriteEvictFull:     return "WriteEvictFull";
+        case Opcode::ReadOnce:           return "ReadOnce";
         case Opcode::ReadNoSnp:          return "ReadNoSnp";
         case Opcode::WriteNoSnp:         return "WriteNoSnp";
         case Opcode::CompData:           return "CompData";
@@ -52,9 +58,13 @@ inline const char* opcodeToString(Opcode op) {
         case Opcode::SnpCleanInvalid:    return "SnpCleanInvalid";
         case Opcode::SnpUnique:          return "SnpUnique";
         case Opcode::SnpNotSharedDirty:  return "SnpNotSharedDirty";
+        case Opcode::SnpOnce:            return "SnpOnce";
+        case Opcode::SnpShared:          return "SnpShared";
         case Opcode::SnpCleanInvalidResp:    return "SnpCleanInvalidResp";
         case Opcode::SnpUniqueResp:          return "SnpUniqueResp";
         case Opcode::SnpNotSharedDirtyResp:  return "SnpNotSharedDirtyResp";
+        case Opcode::SnpOnceResp:            return "SnpOnceResp";
+        case Opcode::SnpSharedResp:          return "SnpSharedResp";
         default:                         return "Unknown";
     }
 }

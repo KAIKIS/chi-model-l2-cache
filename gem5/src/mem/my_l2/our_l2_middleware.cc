@@ -130,6 +130,8 @@ chi::Opcode OurL2Middleware::gem5ToOpcode(CHIRequestType type)
         return chi::Opcode::WriteBackFull;
       case CHIRequestType_ReadNotSharedDirty:
         return chi::Opcode::ReadNotSharedDirty;
+      case CHIRequestType_ReadOnce:
+        return chi::Opcode::ReadOnce;
       case CHIRequestType_WriteUniqueFull:
         return chi::Opcode::WriteUniqueFull;
       case CHIRequestType_WriteEvictFull:
@@ -263,6 +265,16 @@ void OurL2Middleware::executeActions(
           case chi::ProtocolAction::SendSnpNotSharedDirty: {
             MachineID target(MachineType_Cache, a.destNode);
             sendSnpNotSharedDirty(a.addr, target, a.txnId, a.retToSrc);
+            break;
+          }
+          case chi::ProtocolAction::SendSnpOnce: {
+            MachineID target(MachineType_Cache, a.destNode);
+            sendSnpOnce(a.addr, target, a.txnId, a.retToSrc);
+            break;
+          }
+          case chi::ProtocolAction::SendSnpShared: {
+            MachineID target(MachineType_Cache, a.destNode);
+            sendSnpShared(a.addr, target, a.txnId, a.retToSrc);
             break;
           }
         }
@@ -452,6 +464,48 @@ void OurL2Middleware::sendSnpNotSharedDirty(
         curTick(), cacheLineSize, m_ruby_system);
     snp->setaddr(addr);
     snp->settype(CHIRequestType_SnpNotSharedDirtyFwd);
+    snp->setrequestor(m_machineID);
+    NetDest dest(m_ruby_system);
+    dest.add(target);
+    snp->setDestination(dest);
+    snp->setallowRetry(false);
+    snp->setusesTxnId(false);
+    snp->settxnId(txnId);
+    snp->setretToSrc(retToSrc);
+    snp->setaccAddr(addr);
+    snp->setaccSize(cacheLineSize);
+    trySendSnoop(snp);
+}
+
+// --- Helper: send SnpOnce to RN-F ---
+void OurL2Middleware::sendSnpOnce(
+    Addr addr, const MachineID& target, chi::TxnID txnId, bool retToSrc)
+{
+    auto snp = std::make_shared<CHIRequestMsg>(
+        curTick(), cacheLineSize, m_ruby_system);
+    snp->setaddr(addr);
+    snp->settype(CHIRequestType_SnpOnce);
+    snp->setrequestor(m_machineID);
+    NetDest dest(m_ruby_system);
+    dest.add(target);
+    snp->setDestination(dest);
+    snp->setallowRetry(false);
+    snp->setusesTxnId(false);
+    snp->settxnId(txnId);
+    snp->setretToSrc(retToSrc);
+    snp->setaccAddr(addr);
+    snp->setaccSize(cacheLineSize);
+    trySendSnoop(snp);
+}
+
+// --- Helper: send SnpShared to RN-F ---
+void OurL2Middleware::sendSnpShared(
+    Addr addr, const MachineID& target, chi::TxnID txnId, bool retToSrc)
+{
+    auto snp = std::make_shared<CHIRequestMsg>(
+        curTick(), cacheLineSize, m_ruby_system);
+    snp->setaddr(addr);
+    snp->settype(CHIRequestType_SnpShared);
     snp->setrequestor(m_machineID);
     NetDest dest(m_ruby_system);
     dest.add(target);

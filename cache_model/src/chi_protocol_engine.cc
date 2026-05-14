@@ -34,6 +34,7 @@ std::vector<ProtocolAction> ChiProtocolEngine::recvRequest(
         case Opcode::ReadNotSharedDirty: readNotSharedDirtyReqs_++; return handleReadNotSharedDirty(txn);
         case Opcode::WriteUniqueFull:    writeUniqueFullReqs_++;    return handleWriteUniqueFull(txn);
         case Opcode::WriteEvictFull:     writeEvictFullReqs_++;     return handleWriteEvictFull(txn);
+        case Opcode::ReadOnce:           readOnceReqs_++;           return handleReadOnce(txn);
         // SN-F requests from upstream HN-F: treat like cacheable requests
         case Opcode::ReadNoSnp:          readSharedReqs_++;    return handleReadShared(txn);
         case Opcode::WriteNoSnp:         writeBackReqs_++;     return handleWriteNoSnp(txn);
@@ -264,6 +265,73 @@ std::vector<ProtocolAction> ChiProtocolEngine::handleReadNotSharedDirty(
     pt.origReq = txn;
     pt.state = PendingState::WaitMemData;
     pt.targetState = LineState::UD;
+    pending_[memId] = pt;
+
+    auto a = makeAction(ProtocolAction::SendReadNoSnp, addr, memId);
+    return {a};
+}
+
+// ============================================================
+// handleReadOnce — read-once, requester does NOT cache the line
+// ============================================================
+
+std::vector<ProtocolAction> ChiProtocolEngine::handleReadOnce(
+    const ChiTransaction& txn)
+{
+    Addr addr = txn.addr;
+    auto resp = cache_->lookup(addr);
+    if (resp.result == LookupResult::Hit) hitCount_++; else missCount_++;
+
+    if (resp.result == LookupResult::Hit) {
+        LineState curState = resp.state;
+        int reqNum = static_cast<int>(txn.srcNodeID);
+
+        if (curState == LineState::UD || curState == LineState::SD) {
+            const auto& allSharers = cache_->getSharers(addr);
+            int snoopCount = 0;
+            for (NodeID s : allSharers) { if (s != reqNum) snoopCount++; }
+
+            if (snoopCount > 0) {
+                PendingTxn pt;
+                pt.origReq = txn;
+                pt.state = PendingState::WaitSnoopResp;
+                pt.targetState = LineState::SC;
+                pt.pendingSnoopCount = snoopCount;
+                pt.pendingSnoopDataCount = snoopCount;
+                pending_[txn.txnID] = pt;
+
+                std::vector<ProtocolAction> actions;
+                for (NodeID s : allSharers) {
+                    if (s == reqNum) continue;
+                    TxnID snoopId = nextSnoopTxnId_++;
+                    snoopToOrig_[snoopId] = txn.txnID;
+                    auto a = makeAction(ProtocolAction::SendSnpOnce, addr, snoopId);
+                    a.destNode = s;
+                    a.retToSrc = true;
+                    actions.push_back(a);
+                }
+                return actions;
+            }
+            // No other sharers — fall through to serve directly
+        }
+
+        // Serve directly — do NOT add requester as sharer (ReadOnce)
+        auto a = makeAction(ProtocolAction::SendCompData, addr, txn.txnID);
+        a.destNode = txn.srcNodeID;
+        a.respState = cache_->getState(addr);
+        std::memcpy(a.data, cache_->getData(addr), CACHE_LINE_SIZE);
+        return {a};
+    }
+
+    // Miss — see TODO in handleReadShared::Miss block.
+    assert(resp.result != LookupResult::MissEvictDirty);
+    TxnID memId = nextInternalTxnId_++;
+    memToOrig_[memId] = txn.txnID;
+
+    PendingTxn pt;
+    pt.origReq = txn;
+    pt.state = PendingState::WaitMemData;
+    pt.targetState = LineState::SC;
     pending_[memId] = pt;
 
     auto a = makeAction(ProtocolAction::SendReadNoSnp, addr, memId);
@@ -508,7 +576,10 @@ std::vector<ProtocolAction> ChiProtocolEngine::recvData(
 
         Addr lineAddr = pt.origReq.addr;
         cache_->fill(lineAddr, pt.targetState, data);
-        cache_->addSharer(lineAddr, pt.origReq.srcNodeID);
+        // ReadOnce: requester does not cache — don't add as sharer
+        if (pt.origReq.opcode != Opcode::ReadOnce) {
+            cache_->addSharer(lineAddr, pt.origReq.srcNodeID);
+        }
 
         std::vector<ProtocolAction> actions;
 
@@ -614,7 +685,10 @@ std::vector<ProtocolAction> ChiProtocolEngine::completePending(TxnID origTxnId)
         a.destNode = pt.origReq.srcNodeID;
         actions.push_back(a);
     } else {
-        cache_->addSharer(addr, pt.origReq.srcNodeID);
+        // ReadOnce: requester does not cache — don't add as sharer
+        if (pt.origReq.opcode != Opcode::ReadOnce) {
+            cache_->addSharer(addr, pt.origReq.srcNodeID);
+        }
         auto a = makeAction(ProtocolAction::SendCompData, addr, pt.origReq.txnID);
         a.destNode = pt.origReq.srcNodeID;
         a.respState = cache_->getState(addr);
@@ -633,6 +707,7 @@ std::vector<ProtocolAction> ChiProtocolEngine::completePending(TxnID origTxnId)
 void ChiProtocolEngine::printStats() const {
     uint64_t total = readSharedReqs_ + readUniqueReqs_ + cleanUniqueReqs_
                      + writeBackReqs_ + readNotSharedDirtyReqs_
+                     + readOnceReqs_
                      + writeUniqueFullReqs_ + writeEvictFullReqs_
                      + evictCount_;
     uint64_t accesses = hitCount_ + missCount_;
@@ -644,10 +719,11 @@ void ChiProtocolEngine::printStats() const {
     printf("[%s Stats]   CleanUnique:              %lu\n", label_, cleanUniqueReqs_);
     printf("[%s Stats]   WriteBackFull:            %lu\n", label_, writeBackReqs_);
     printf("[%s Stats]   ReadNotSharedDirty:       %lu\n", label_, readNotSharedDirtyReqs_);
+    printf("[%s Stats]   ReadOnce:                 %lu\n", label_, readOnceReqs_);
     printf("[%s Stats]   WriteUniqueFull:          %lu\n", label_, writeUniqueFullReqs_);
     printf("[%s Stats]   WriteEvictFull:           %lu\n", label_, writeEvictFullReqs_);
     printf("[%s Stats]   Evict:                    %lu\n", label_, evictCount_);
-    printf("[%s Stats] ----------------------------------------\n");
+    printf("[%s Stats] ----------------------------------------\n", label_);
     printf("[%s Stats] Cache lookups:              %lu\n", label_, accesses);
     printf("[%s Stats]   Hit:                      %lu\n", label_, hitCount_);
     printf("[%s Stats]   Miss:                     %lu\n", label_, missCount_);

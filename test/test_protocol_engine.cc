@@ -306,6 +306,82 @@ static void test_CleanUnique_SC_StillUses_SnpCleanInvalid() {
     std::cout << "  PASS: CleanUnique SC -> SendSnpCleanInvalid\n";
 }
 
+// ---- ReadOnce tests ----
+
+static void test_ReadOnce_Miss() {
+    L2Cache cache;
+    ChiProtocolEngine engine(&cache);
+    Addr addr = 0x70000;
+
+    auto actions = engine.recvRequest(makeReq(Opcode::ReadOnce, addr, 0, 1));
+    assert(actions.size() == 1);
+    assert(actions[0].type == ProtocolAction::SendReadNoSnp);
+    std::cout << "  PASS: ReadOnce miss -> SendReadNoSnp\n";
+}
+
+static void test_ReadOnce_Hit_SoleSharer() {
+    L2Cache cache;
+    ChiProtocolEngine engine(&cache);
+    Addr addr = 0x70000;
+
+    uint8_t data[64];
+    cache.fill(addr, LineState::UC, data);
+    cache.addSharer(addr, 0);
+
+    auto actions = engine.recvRequest(makeReq(Opcode::ReadOnce, addr, 0, 1));
+    assert(actions.size() == 1);
+    assert(actions[0].type == ProtocolAction::SendCompData);
+    // ReadOnce does NOT add requester as sharer
+    assert(cache.getSharers(addr).size() == 1);  // only original sharer
+    std::cout << "  PASS: ReadOnce hit sole sharer -> SendCompData, no new sharer\n";
+}
+
+static void test_ReadOnce_Hit_WithDirtySharer() {
+    L2Cache cache;
+    ChiProtocolEngine engine(&cache);
+    Addr addr = 0x70000;
+
+    uint8_t data[64];
+    fillPattern(data, 0xAA);
+    cache.fill(addr, LineState::SD, data);
+    cache.addSharer(addr, 0);
+    cache.addSharer(addr, 1);  // requester is 1, sharer 0 has dirty copy
+
+    auto actions = engine.recvRequest(makeReq(Opcode::ReadOnce, addr, 1, 1));
+    assert(actions.size() == 1);
+    assert(actions[0].type == ProtocolAction::SendSnpOnce);
+    assert(actions[0].destNode == 0);
+    assert(actions[0].retToSrc == true);
+    std::cout << "  PASS: ReadOnce with dirty sharer -> SendSnpOnce\n";
+}
+
+static void test_ReadOnce_Snoop_Complete() {
+    L2Cache cache;
+    ChiProtocolEngine engine(&cache);
+    Addr addr = 0x70000;
+
+    uint8_t data[64];
+    fillPattern(data, 0xBB);
+    cache.fill(addr, LineState::SD, data);
+    cache.addSharer(addr, 0);
+    cache.addSharer(addr, 2);  // requester is 2
+
+    auto actions1 = engine.recvRequest(makeReq(Opcode::ReadOnce, addr, 2, 1));
+    assert(actions1.size() == 1);
+    assert(actions1[0].type == ProtocolAction::SendSnpOnce);
+
+    // SnpOnceRespData arrives on datIn for a dirty sharer — use recvData, not recvResponse
+    uint8_t snoopData[64];
+    fillPattern(snoopData, 0xCC);
+    auto actions2 = engine.recvData(actions1[0].txnId, addr, snoopData);
+    assert(actions2.size() == 1);
+    assert(actions2[0].type == ProtocolAction::SendCompData);
+    assert(actions2[0].respState == LineState::SC);
+    // ReadOnce does NOT add requester as sharer after completion
+    assert(cache.getSharers(addr).size() == 0);  // all cleared, requester not added
+    std::cout << "  PASS: ReadOnce snoop complete -> SendCompData, no sharer\n";
+}
+
 static void test_CleanUnique_UC_Hit() {
     L2Cache cache;
     ChiProtocolEngine engine(&cache);
@@ -443,6 +519,10 @@ int main() {
     test_WriteEvictFull();
     test_CleanUnique_SD_Uses_SnpNotSharedDirty();
     test_CleanUnique_SC_StillUses_SnpCleanInvalid();
+    test_ReadOnce_Miss();
+    test_ReadOnce_Hit_SoleSharer();
+    test_ReadOnce_Hit_WithDirtySharer();
+    test_ReadOnce_Snoop_Complete();
     std::cout << "All ChiProtocolEngine tests passed!\n";
     return 0;
 }

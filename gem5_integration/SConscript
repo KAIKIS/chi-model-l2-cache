@@ -5,7 +5,7 @@ Import('*')
 SimProtocol('our_l2')
 
 # 链接 CHI-new 静态库
-chi_new_lib = Dir('/home/zhangkai/work/CHI-new/build')
+chi_new_lib = Dir('../build')
 
 env.Append(LIBPATH=[chi_new_lib])
 env.Append(LIBS=['cache_model', 'chi_model', 'middleware'])
