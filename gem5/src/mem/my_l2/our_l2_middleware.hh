@@ -31,6 +31,8 @@ class OurL2Middleware : public CHIGenericController
 
   public:
     void wakeup() override;
+    void functionalRead(const Addr& addr, Packet* pkt, WriteMask& mask) override;
+    int  functionalWrite(const Addr& addr, Packet* pkt) override;
 
   private:
     chi::L2Cache cacheStorage_;

@@ -29,6 +29,35 @@ OurL2Middleware::OurL2Middleware(const OurL2MiddlewareParams &p)
 OurL2Middleware::~OurL2Middleware() {}
 
 void
+OurL2Middleware::functionalRead(const Addr& addr, Packet* pkt, WriteMask& mask)
+{
+    // Called by gem5 SE mode for functional (debug) memory reads.
+    // Check if the address is in our L2 cache and return the data.
+    chi::LineState st = cacheStorage_.getState(addr);
+    if (st != chi::LineState::I) {
+        const uint8_t* data = cacheStorage_.getData(addr);
+        if (data) {
+            memcpy(pkt->getPtr<uint8_t>(), data, cacheLineSize);
+            mask.setMask(0, cacheLineSize);
+            return;
+        }
+    }
+    // Not in cache — let other controllers / memory handle it
+}
+
+int
+OurL2Middleware::functionalWrite(const Addr& addr, Packet* pkt)
+{
+    // Write data into L2 cache if the line is present
+    chi::LineState st = cacheStorage_.getState(addr);
+    if (st != chi::LineState::I) {
+        cacheStorage_.writeData(addr, pkt->getPtr<const uint8_t>());
+        return 1;
+    }
+    return 0;
+}
+
+void
 OurL2Middleware::wakeup()
 {
     // Delegate to parent: CHIGenericController::wakeup() processes all four

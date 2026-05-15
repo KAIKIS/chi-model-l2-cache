@@ -13,7 +13,10 @@
 | **WriteBackFull** | `0x03` | `handleWriteBackFull` | CompDBIDResp → WaitL1Data → 存入 L2(UD) | — |
 | **WriteUniqueFull** | `0x05` | `handleWriteUniqueFull` | 同 WriteBackFull | — |
 | **WriteEvictFull** | `0x06` | `handleWriteEvictFull` | 同 WriteBackFull | — |
+| **ReadOnce** | `0x07` | `handleReadOnce` | UD/SD 且有其他 sharer → SnpOnce；其余直接 CompData (不添加 sharer) | SendReadNoSnp → CompData (不添加 sharer) |
 | **Evict** | — | `invalidate()` (直通) | 直接失效 L2 对应行，返回 Comp_I | — |
+| **ReadNoSnp** | `0x10` | `handleReadShared` | L3 专用：L2 miss 发来，当作可缓存读 | — |
+| **WriteNoSnp** | `0x11` | `handleWriteNoSnp` | L3 专用：L2 posted write，仅存数据不发 CompDBIDResp | — |
 
 ### HN-F → SN-F（L2 发往 Memory Controller）
 
@@ -38,6 +41,8 @@
 | **SnpCleanInvalid** | `SendSnpCleanInvalid` | ReadShared (UD/SD) / CleanUnique (SC) | 失效 + 回写脏数据 |
 | **SnpUnique** | `SendSnpUnique` | ReadUnique / ReadNotSharedDirty | 失效 + 回写脏数据 |
 | **SnpNotSharedDirty** | `SendSnpNotSharedDirty` | CleanUnique (SD) | 保留 SC 副本 + 回写脏数据 |
+| **SnpOnce** | `SendSnpOnce` | ReadOnce (UD/SD) | 失效 + 回写脏数据 |
+| **SnpShared** | `SendSnpShared` | (已定义，待接入) | 共享数据，保留 SC 副本 |
 
 ### 内部处理的消息
 
@@ -62,7 +67,7 @@
 | **缓存行状态** | I/UC/UD/SC/SD (5 态) | 同左 | ✓ 一致 |
 | **TxnID 管理** | 8-bit (0-255) | 引擎使用 10000+ (snoop) / 20000+ (memory)，gem5 消息使用 gem5 分配的 txnId (0-63) | ⚠️ 引擎内部使用大范围 txnId 避免与 gem5 冲突，外部消息使用 gem5 的 txnId |
 | **TBE 管理** | 硬件资源限制 (TBETable) | 使用 `std::unordered_map` (无限制) | ⚠️ 功能正确，但不模拟资源限制 |
-| **缓存容量** | 可配置 | L2Cache 固定 512-set × 8-way = 256KB | ⚠️ 可配置但当前固定 |
+| **缓存容量** | 可配置 | L2Cache 构造函数接受 numSets/numWays 参数，L2=512×8=256KB, L3=2048×16=2MB | ✓ 可配置 |
 | **Requester 顺序** | 支持 RespOrder | 不支持 | ❌ 未实现 |
 
 ### Issue 2 snoop 类型与协议 SPEC 的对应关系
@@ -83,9 +88,10 @@
 4. **不支持 DVM**：无 Distributed Virtual Memory 事务
 5. **不支持流控**：RetryAck / PCrdGrant 未实现（MessageBuffer 默认无限容量）
 6. **不支持 Cache 维护操作**：CleanShared/Invalid/Persist/MakeInvalid 未实现
-7. **不支持 ReadOnce / ReadClean / ReadNotSharedDirty 命中 SD 时的 WB 语义**——当前直接返回数据而不写回内存
+7. **不支持 ReadClean / ReadNotSharedDirty 命中 SD 时的 WB 语义**——当前直接返回数据而不写回内存
 8. **MissEvictDirty 未处理**：L2 miss 同时需要驱逐脏行时触发 assert，大工作集会失败
 9. **WriteUniqueFull 未区分语义**：SPEC 中 L1 保留 Unique 状态，当前实现等同于 WriteBackFull（存入 L2 之后 L1 状态由 gem5 L1 自行管理，不影响正确性）
+10. **不支持 Ping-Pong 多轮 futex 同步**：gem5 SE 模式下 futex WAKE/Wait 存在时序竞争，单轮共享读写稳定，多轮 ping-pong 不稳定
 
 ---
 
@@ -109,7 +115,7 @@ cd build && make test_protocol_engine -j$(nproc)
 ./test/test_protocol_engine
 ```
 
-预期输出：`All ChiProtocolEngine tests passed!`（当前 22 项测试）
+预期输出：`All ChiProtocolEngine tests passed!`（当前 26 项测试）
 
 ### 2. 单核集成测试（gem5 全链路）
 
@@ -127,7 +133,7 @@ cd gem5 && scons build/ARM/gem5.opt -j$(nproc)
 
 ### 3. 双核一致性测试（gem5 全链路）
 
-验证双核共享 L2 的 snoop 路径：
+验证双核共享 L2 的 snoop 路径（futex 同步）：
 
 ```bash
 # 编译（同上）
@@ -137,12 +143,16 @@ cd gem5 && scons build/ARM/gem5.opt -j$(nproc)
 ./build/ARM/gem5.opt ../test/gem5_run_dual_core.py
 ```
 
-预期输出：
+预期输出 (test_share_full)：
 ```
-main: begin
-child: started
-child: done
-main: done
+PASS: c0_write_readback
+PASS: c1_write_readback
+PASS: c0_stride
+PASS: c1_stride
+PASS: c0_reverse
+PASS: c1_reverse
+PASS: c0_shared_write
+PASS: c1_shared_read
 ```
 
 ### 4. 编译并运行测试二进制
@@ -152,22 +162,27 @@ main: done
 cd build-aarch64 && make -j$(nproc)
 
 # 可用测试二进制：
-#   test_128kb        — 单核 128KB 数据测试
-#   test_pthread_min  — 双核最小 pthread 测试
-#   test_dual_core    — 双核完整一致性测试
-#   test_shared       — 共享变量测试
-#   test_noshare      — 无共享变量测试（对照组）
+#   test_128kb          — 单核 128KB 数据测试
+#   test_pthread_min    — 双核最小 pthread 测试
+#   test_dual_core      — 双核完整一致性测试 (busy-wait, 不适用于 gem5)
+#   test_share_full     — 双核 futex 共享测试 (8/8 PASS, 当前使用)
+#   test_share_minimal  — 双核最简共享测试
+#   test_shared         — 共享变量测试
+#   test_noshare        — 无共享变量测试（对照组）
 ```
 
 ### 一键运行所有测试
 
 ```bash
-# 单元测试
+# 单元测试 (26 项)
 cd build && make test_protocol_engine -j$(nproc) && ./test/test_protocol_engine
 
-# 单核集成测试
+# 单核 L1+L2 集成测试
 cd ../gem5 && ./build/ARM/gem5.opt ../test/gem5_run_128kb.py
 
-# 双核集成测试
+# 双核一致性测试
 ./build/ARM/gem5.opt ../test/gem5_run_dual_core.py
+
+# L1+L2+L3 单核测试
+./build/ARM/gem5.opt ../test/gem5_run_l3_single_core.py
 ```

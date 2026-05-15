@@ -218,7 +218,7 @@ from gem5.resources.resource import BinaryResource
 BP = _os.path.normpath(_os.path.join(
     _os.path.dirname(_os.path.abspath(__file__)), "..", "build-aarch64"))
 board.set_se_binary_workload(
-    binary=BinaryResource(f"{BP}/test_pthread_min"),
+    binary=BinaryResource(f"{BP}/test_share_full"),
 )
 
 print("=" * 60)

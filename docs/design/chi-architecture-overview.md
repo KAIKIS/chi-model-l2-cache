@@ -25,20 +25,21 @@
 │       ╔═════▼══════════════════════════════════════════╗                  │
 │       ║           ★ 本项目实现范围 ★                    ║                  │
 │       ║  ┌──────────────────────────────────────────┐ ║                  │
-│       ║  │         OurL2Middleware                   │ ║                  │
+│       ║  │    OurL2Middleware / OurL3Middleware      │ ║                  │
 │       ║  │  (gem5 CHIGenericController 子类)         │ ║                  │
 │       ║  │  ┌────────────────────────────────────┐  │ ║                  │
 │       ║  │  │       ChiProtocolEngine             │  │ ║                  │
 │       ║  │  │  (CHI 协议状态机，gem5 无关)         │  │ ║                  │
 │       ║  │  │  ┌──────────────────────────────┐  │  │ ║                  │
-│       ║  │  │  │         L2Cache               │  │  │ ║                  │
-│       ║  │  │  │  (组相联缓存 + sharer 跟踪)    │  │  │ ║                  │
+│       ║  │  │  │     L2Cache (可配置大小)       │  │  │ ║                  │
+│       ║  │  │  │  L2: 512×8=256KB              │  │  │ ║                  │
+│       ║  │  │  │  L3: 2048×16=2MB              │  │  │ ║                  │
 │       ║  │  │  └──────────────────────────────┘  │  │ ║                  │
 │       ║  │  └────────────────────────────────────┘  │ ║                  │
 │       ║  └──────────────────────────────────────────┘ ║                  │
 │       ╚══════════════════════════════════════════════╝                  │
 │             │                                                            │
-│             │ ReadNoSnp / WriteNoSnp                                     │
+│             │ ReadNoSnp / WriteNoSnp (直接到 DDR，或经 L3)               │
 │       ┌─────▼─────┐                                                      │
 │       │  Memory    │  gem5 内置 Memory Controller (SN-F)                  │
 │       │ Controller │                                                     │
@@ -50,7 +51,7 @@
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
-**本项目负责的范围**：HN-F（Home Node with Full cache）—— 接收来自 RN-F（L1 Cache）的 CHI 请求，管理 L2/L3 缓存行状态和 sharer 跟踪，在需要时向其他 RN-F 发起 snoop，在 miss 时向 SN-F（Memory Controller）发起内存访问。
+**本项目负责的范围**：HN-F（Home Node with Full cache）—— 接收来自 RN-F（L1 Cache）的 CHI 请求，管理 L2/L3 缓存行状态和 sharer 跟踪，在需要时向其他 RN-F 发起 snoop，在 miss 时向 SN-F（Memory Controller）发起内存访问。支持 L1→L2→DDR 两级和 L1→L2→L3→DDR 三级缓存层级。
 
 **不负责的范围**：CPU 模型、L1 Cache（gem5 标准 MOESI CHI）、Memory Controller（gem5 标准）、片上网络（gem5 Ruby Network）、DRAM 模型。
 
@@ -66,18 +67,23 @@
 │  Layer 4: Test & Validation                                     │
 │  ┌───────────────────────────────────────────────────────────┐  │
 │  │  test/                                                     │  │
-│  │  ├── test_protocol_engine.cc   单元测试 (22 项)             │  │
+│  │  ├── test_protocol_engine.cc   单元测试 (26 项)             │  │
 │  │  ├── gem5_run_128kb.py         单核集成测试                 │  │
 │  │  ├── gem5_run_dual_core.py     双核一致性测试               │  │
-│  │  └── gem5_run_l3_single_core.py L3 单核测试                 │  │
+│  │  ├── gem5_run_l3_single_core.py L3 单核测试                 │  │
+│  │  ├── test_share_full.cc        双核 futex 共享测试          │  │
+│  │  └── test_share_minimal.cc     双核最小共享测试             │  │
 │  └───────────────────────────────────────────────────────────┘  │
 │                          │                                       │
 │  Layer 3: gem5 Integration (适配层)                              │
 │  ┌───────────────────────────────────────────────────────────┐  │
-│  │  gem5_integration/OurL2.py      Python SimObject 声明       │  │
-│  │  gem5/src/mem/my_l2/                                        │  │
+│  │  gem5/src/mem/my_l2/            L2 中间件                   │  │
 │  │  ├── our_l2_middleware.hh/.cc   中间件：gem5 ↔ Engine 适配  │  │
-│  │  ├── OurL2Middleware.py         SimObject 参数定义          │  │
+│  │  ├── OurL2Middleware.py         SimObject (512×8=256KB)    │  │
+│  │  └── SConscript                 构建脚本                    │  │
+│  │  gem5/src/mem/my_l3/            L3 中间件                   │  │
+│  │  ├── our_l3_middleware.hh/.cc   同 L2，更大缓存             │  │
+│  │  ├── OurL3Middleware.py         SimObject (2048×16=2MB)    │  │
 │  │  └── SConscript                 构建脚本                    │  │
 │  └───────────────────────────────────────────────────────────┘  │
 │                          │                                       │
@@ -112,7 +118,7 @@
 | **cache_line** | `cache_line.hh` | `LineState` 枚举 (I/UC/SC/UD/SD 五态)、`CacheLine` (tag+state+data+sharers)、`CacheSet` (LRU + lookup + victim selection) |
 | **l2_cache** | `l2_cache.hh/.cc` | 组相联缓存：地址解析 (tag/set/offset)、lookup/fill/invalidate、sharer 增删查、状态读写 |
 | **chi_protocol_engine** | `chi_protocol_engine.hh/.cc` | **核心**：CHI 协议状态机。三个入口 (`recvRequest`/`recvData`/`recvResponse`)，按 opcode 分派 handler，管理 pending 事务和 snoop 跟踪 |
-| **our_l2_middleware** | `our_l2_middleware.hh/.cc` | gem5 适配层：继承 `CHIGenericController`，将 gem5 CHI 消息翻译为 `ChiTransaction`，委托给 `ChiProtocolEngine`，将 `ProtocolAction` 翻译为 gem5 消息发送 |
+| **our_l2_middleware** | `my_l2/`, `my_l3/` | gem5 适配层：继承 `CHIGenericController`，将 gem5 CHI 消息翻译为 `ChiTransaction`，委托给 `ChiProtocolEngine`，将 `ProtocolAction` 翻译为 gem5 消息发送。L2/L3 共用同一引擎，仅缓存参数不同 |
 
 ---
 
@@ -269,6 +275,8 @@ recvRequest(ChiTransaction)
   ├── Opcode::WriteUniqueFull ► handleWriteUniqueFull()
   ├── Opcode::WriteEvictFull ─► handleWriteEvictFull()
   ├── Opcode::ReadOnce ───────► handleReadOnce()
+  ├── Opcode::ReadNoSnp ──────► handleReadShared()   (L3: SN请求)
+  ├── Opcode::WriteNoSnp ─────► handleWriteNoSnp()   (L3: posted write)
   │                              │
   │         ┌────────────────────┤
   │         │  cache_->lookup()  │
@@ -479,7 +487,10 @@ flowchart LR
 | `WriteBackFull (0x03)` | `handleWriteBackFull` | CompDBIDResp → WaitL1Data → fill(UD) | N/A |
 | `WriteUniqueFull (0x05)` | `handleWriteUniqueFull` | 同 WriteBackFull | N/A |
 | `WriteEvictFull (0x06)` | `handleWriteEvictFull` | 同 WriteBackFull | N/A |
+| `ReadOnce (0x07)` | `handleReadOnce` | UD/SD 且有其他 sharer → SnpOnce；其余直接 CompData (不添加 sharer) | ReadNoSnp → CompData (不添加 sharer) |
 | `Evict` | `invalidate()` (直通) | 直接失效 L2，返回 Comp_I | N/A |
+| `ReadNoSnp (0x10)` | `handleReadShared` | L3 专用：L2 miss 后发往 L3，当作可缓存读 | — |
+| `WriteNoSnp (0x11)` | `handleWriteNoSnp` | L3 专用：L2 发来的 posted write，仅存数据不发 CompDBIDResp | — |
 
 ### 7.2 HN-F → SN-F (内存访问)
 
@@ -496,7 +507,7 @@ flowchart LR
 | `SnpUnique` | ReadUnique / ReadNotSharedDirty | 失效 + 回写脏数据 |
 | `SnpNotSharedDirty` | CleanUnique (SD) | 保留 SC 副本 + 回写脏数据 |
 | `SnpOnce` | ReadOnce (UD/SD) | 失效 + 回写脏数据 (不保留副本) |
-| `SnpShared` | (已定义，待实现) | 共享数据，保留副本 |
+| `SnpShared` | (已定义，待接入) | 共享数据，保留 SC 副本 |
 
 ---
 
@@ -584,12 +595,14 @@ struct PendingTxn {
 | `cache_model/include/cache_line.hh` | ~107 | CacheLine, CacheSet, LineState |
 | `cache_model/include/l2_cache.hh` | ~90 | L2Cache 接口 |
 | `cache_model/src/l2_cache.cc` | ~242 | L2Cache 实现 |
-| `cache_model/include/chi_protocol_engine.hh` | ~124 | ChiProtocolEngine 接口 |
-| `cache_model/src/chi_protocol_engine.cc` | ~738 | ChiProtocolEngine 实现 (★核心) |
-| `gem5_integration/OurL2.py` | ~15 | SimObject Python 声明 |
+| `cache_model/include/chi_protocol_engine.hh` | ~128 | ChiProtocolEngine 接口 |
+| `cache_model/src/chi_protocol_engine.cc` | ~760 | ChiProtocolEngine 实现 (★核心) |
 | `gem5/src/mem/my_l2/our_l2_middleware.hh` | ~87 | OurL2Middleware 接口 |
-| `gem5/src/mem/my_l2/our_l2_middleware.cc` | ~523 | OurL2Middleware 实现 |
-| `test/test_protocol_engine.cc` | — | 22 项单元测试 |
+| `gem5/src/mem/my_l2/our_l2_middleware.cc` | ~545 | OurL2Middleware 实现 |
+| `gem5/src/mem/my_l3/our_l3_middleware.hh` | ~87 | OurL3Middleware 接口 |
+| `gem5/src/mem/my_l3/our_l3_middleware.cc` | ~560 | OurL3Middleware 实现 |
+| `test/test_protocol_engine.cc` | — | 26 项单元测试 |
 | `test/gem5_run_128kb.py` | — | 单核集成测试脚本 |
-| `test/gem5_run_dual_core.py` | ~235 | 双核一致性测试脚本 |
+| `test/gem5_run_dual_core.py` | — | 双核一致性测试脚本 |
 | `test/gem5_run_l3_single_core.py` | — | L3 单核测试脚本 |
+| `test/test_share_full.cc` | — | 双核 futex 共享测试 |
